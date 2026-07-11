@@ -1,1 +1,15 @@
 /target
+/cli/target
+
+# Next.js dashboard
+/dashboard/.next
+/dashboard/out
+/dashboard/node_modules
+/dashboard/.env*
+!/dashboard/.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

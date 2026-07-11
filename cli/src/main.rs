@@ -21,9 +21,9 @@ const HELP_TEMPLATE: &str =
 #[command(
     version,
     about = "Agent-friendly CLI for recording and querying spending in PostgreSQL.",
-    long_about = "spend is designed for programmatic use by agents. Commands use explicit flags, repeatable --tag filters, and consistent output switches. Database connection settings are read from ~/.config/spend/config.json.",
+    long_about = "spend is designed for programmatic use by agents. Commands use explicit flags, a single optional --tag per spend, and consistent output switches. Database connection settings are read from ~/.config/spend/config.json.",
     help_template = HELP_TEMPLATE,
-    after_help = "CONFIG:\n    ~/.config/spend/config.json must contain { \"database_url\": \"postgres://...\" }.\n\nSCHEMA:\n    spend fails if the required PostgreSQL schema is missing. The spends table must include optional note TEXT support plus payee default-tag tables.\n\nPAYEE DEFAULTS:\n    Known payees can have default tags. spend add uses those defaults only when no explicit --tag is passed.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend payees add --name Uber --tag transport\n    spend list --tag food --date-start 2026-06-01 --date-end 2026-06-30 --json\n    spend summary --group-by month\n    spend validate-tags --tag food --tag unknown"
+    after_help = "CONFIG:\n    ~/.config/spend/config.json must contain { \"database_url\": \"postgres://...\" }.\n\nSCHEMA:\n    spend fails if the required PostgreSQL schema is missing. Spends have optional tag_id; known payees have required tag_id.\n\nPAYEE DEFAULTS:\n    spend add uses a known payee's default tag only when no explicit --tag is passed. Untagged spends are allowed.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend payees add --name Uber --tag transport\n    spend list --tag food --date-start 2026-06-01 --date-end 2026-06-30 --json\n    spend summary --group-by month\n    spend validate-tags --tag food --tag unknown"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -32,9 +32,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Add one spend. Explicit tags override known payee default tags for this spend only.
+    /// Add one spend. Explicit tag overrides known payee default tag for this spend only.
     #[command(
-        after_help = "PAYEE DEFAULTS:\n    If --tag is omitted and --payee exactly matches a known payee, that payee's default tags are attached. If any --tag is provided, only the explicit tags are used.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend add --amount 430.50 --payee Domino's --tag food --tag friends --note 'late dinner'\n    spend add --amount 1200 --payee Amazon --timestamp 2026-06-24T20:15:00+05:30"
+        after_help = "PAYEE DEFAULTS:\n    If --tag is omitted and --payee exactly matches a known payee, that payee's default tag is attached. If --tag is omitted and no default exists, the spend is untagged.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend add --amount 430.50 --payee Domino's --tag food --note 'late dinner'\n    spend add --amount 1200 --payee Amazon --timestamp 2026-06-24T20:15:00+05:30"
     )]
     Add(AddArgs),
 
@@ -46,15 +46,15 @@ enum Command {
     #[command(after_help = "EXAMPLE:\n    spend remove --id 42")]
     Remove(IdArgs),
 
-    /// Update fields on one spend. Provided tags must already exist.
+    /// Update fields on one spend. Use --clear-tag to make it untagged.
     #[command(
-        after_help = "EXAMPLES:\n    spend update --id 42 --payee 'Uber Auto'\n    spend update --id 42 --clear-tags --tag transport --tag work\n    spend update --id 42 --note 'client visit'"
+        after_help = "EXAMPLES:\n    spend update --id 42 --payee 'Uber Auto'\n    spend update --id 42 --tag transport\n    spend update --id 42 --clear-tag\n    spend update --id 42 --note 'client visit'"
     )]
     Update(UpdateArgs),
 
     /// List spends. All filters compose and use the same names as summary/export.
     #[command(
-        after_help = "FILTER BEHAVIOR:\n    Repeating --tag means the spend must have every provided tag.\n    Date-only values such as 2026-06-01 are accepted for --date-start and --date-end.\n\nEXAMPLES:\n    spend list --tag food\n    spend list --payee Uber\n    spend list --date-start 2026-06-01 --date-end 2026-06-30\n    spend list --amount-min 500 --sort amount --desc --csv"
+        after_help = "FILTER BEHAVIOR:\n    --tag filters by the spend's single tag. Date-only values such as 2026-06-01 are accepted for --date-start and --date-end.\n\nEXAMPLES:\n    spend list --tag food\n    spend list --payee Uber\n    spend list --date-start 2026-06-01 --date-end 2026-06-30\n    spend list --amount-min 500 --sort amount --desc --csv"
     )]
     List(ListArgs),
 
@@ -68,10 +68,10 @@ enum Command {
     #[command(subcommand)]
     Tags(TagsCommand),
 
-    /// Manage known payees and default tags used by spend add.
+    /// Manage known payees and their required default tag used by spend add.
     #[command(
         subcommand,
-        after_help = "BEHAVIOR:\n    Payee names match exactly. spend add applies a known payee's default tags only when no explicit --tag is passed. Explicit --tag values override defaults for that spend only.\n\nEXAMPLES:\n    spend payees list --json\n    spend payees add --name Uber --tag transport\n    spend payees update --name Uber --clear-tags --tag transport --tag work\n    spend payees get --name Uber --json"
+        after_help = "BEHAVIOR:\n    Payee names match exactly. Known payees always have one default tag. spend add applies that tag only when no explicit --tag is passed.\n\nEXAMPLES:\n    spend payees list --json\n    spend payees add --name Uber --tag transport\n    spend payees update --name Uber --tag work\n    spend payees get --name Uber --json"
     )]
     Payees(PayeesCommand),
 
@@ -83,7 +83,7 @@ enum Command {
 
     /// Import spends from CSV or JSON. Missing tags are created automatically.
     #[command(
-        after_help = "INPUT FORMAT:\n    JSON must be an array of objects with amount, payee, optional timestamp, note, and tags.\n    CSV must include amount and payee columns. Optional columns: timestamp,note,tags. Tags in CSV are separated with semicolons.\n\nEXAMPLES:\n    spend import --file spends.json\n    spend import --file spends.csv --format csv"
+        after_help = "INPUT FORMAT:\n    JSON must be an array of objects with amount, payee, optional timestamp, note, and tag. Legacy tags is accepted only if empty or one item.\n    CSV must include amount and payee columns. Optional columns: timestamp,note,tag. Legacy tags is accepted only if empty or one tag.\n\nEXAMPLES:\n    spend import --file spends.json\n    spend import --file spends.csv --format csv"
     )]
     Import(ImportArgs),
 
@@ -101,7 +101,7 @@ enum TagsCommand {
     List,
     /// Add one tag.
     Add(TagAddArgs),
-    /// Remove one tag by name. Fails if any spend still uses it.
+    /// Remove one tag by name. Fails if any spend or payee still uses it.
     Remove(TagNameArgs),
     /// Rename one tag.
     Rename(TagRenameArgs),
@@ -109,13 +109,13 @@ enum TagsCommand {
 
 #[derive(Subcommand)]
 enum PayeesCommand {
-    /// List known payees and their default tags.
+    /// List known payees and their default tag.
     List(OutputJsonArgs),
-    /// Show one known payee and its default tags.
+    /// Show one known payee and its default tag.
     Get(PayeeGetArgs),
-    /// Add one known payee. Tags must already exist.
+    /// Add one known payee. Tag must already exist.
     Add(PayeeAddArgs),
-    /// Replace default tags for one known payee.
+    /// Replace default tag for one known payee.
     Update(PayeeUpdateArgs),
     /// Remove one known payee rule. Historical spends are unchanged.
     Remove(PayeeNameArgs),
@@ -131,9 +131,9 @@ struct AddArgs {
     /// Payee or merchant name.
     #[arg(long)]
     payee: String,
-    /// Existing tag to attach. Repeat --tag for multiple tags.
+    /// Existing tag to attach. If omitted, a known payee default is used when available.
     #[arg(long)]
-    tag: Vec<String>,
+    tag: Option<String>,
     /// ISO 8601 timestamp with timezone, for example 2026-06-24T20:15:00+05:30. Defaults to current local time.
     #[arg(long)]
     timestamp: Option<String>,
@@ -167,18 +167,18 @@ struct UpdateArgs {
     /// Replace the amount. Must have up to two decimal places.
     #[arg(long)]
     amount: Option<Decimal>,
-    /// Replace the payee.
+    /// Replace the payee. This does not automatically apply a known payee default tag.
     #[arg(long)]
     payee: Option<String>,
     /// Replace the timestamp. Must be ISO 8601 with timezone.
     #[arg(long)]
     timestamp: Option<String>,
-    /// Existing tag to attach. Repeat --tag for multiple tags.
+    /// Replace the spend tag.
+    #[arg(long, conflicts_with = "clear_tag")]
+    tag: Option<String>,
+    /// Clear the spend tag, leaving it untagged.
     #[arg(long)]
-    tag: Vec<String>,
-    /// Remove all current tags before applying any provided --tag values.
-    #[arg(long)]
-    clear_tags: bool,
+    clear_tag: bool,
     /// Replace the note. Use an empty string to clear it.
     #[arg(long)]
     note: Option<String>,
@@ -186,9 +186,9 @@ struct UpdateArgs {
 
 #[derive(Args, Clone, Default)]
 struct FilterArgs {
-    /// Require this existing tag. Repeat --tag to require all provided tags.
+    /// Match spends with this single tag.
     #[arg(long)]
-    tag: Vec<String>,
+    tag: Option<String>,
     /// Match exact payee text.
     #[arg(long)]
     payee: Option<String>,
@@ -263,7 +263,7 @@ struct ImportArgs {
 
 #[derive(Args)]
 struct TagFilterArgs {
-    /// Tag name to validate. Repeat --tag for multiple tags.
+    /// Tag name to validate. Repeat --tag for multiple candidate tags.
     #[arg(long, required = true)]
     tag: Vec<String>,
 }
@@ -317,9 +317,9 @@ struct PayeeAddArgs {
     /// Exact payee name to match during spend add.
     #[arg(long)]
     name: String,
-    /// Existing default tag. Repeat --tag for multiple tags.
-    #[arg(long, required = true)]
-    tag: Vec<String>,
+    /// Existing default tag.
+    #[arg(long)]
+    tag: String,
 }
 
 #[derive(Args)]
@@ -327,12 +327,9 @@ struct PayeeUpdateArgs {
     /// Exact payee name.
     #[arg(long)]
     name: String,
-    /// Remove current default tags before applying provided --tag values.
+    /// Existing replacement default tag.
     #[arg(long)]
-    clear_tags: bool,
-    /// Existing default tag. Repeat --tag for multiple tags.
-    #[arg(long)]
-    tag: Vec<String>,
+    tag: String,
 }
 
 #[derive(Args)]
@@ -388,7 +385,7 @@ struct Spend {
     amount: Decimal,
     payee: String,
     note: Option<String>,
-    tags: Vec<String>,
+    tag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -397,6 +394,7 @@ struct ImportSpend {
     payee: String,
     timestamp: Option<String>,
     note: Option<String>,
+    tag: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
 }
@@ -407,6 +405,7 @@ struct CsvImportSpend {
     payee: String,
     timestamp: Option<String>,
     note: Option<String>,
+    tag: Option<String>,
     tags: Option<String>,
 }
 
@@ -422,7 +421,7 @@ struct SummaryRow {
 struct PayeeRule {
     id: i64,
     name: String,
-    tags: Vec<String>,
+    tag: String,
 }
 
 fn main() {
@@ -479,12 +478,10 @@ fn validate_schema(client: &mut Client) -> Result<(), AnyError> {
         ("spends", "amount"),
         ("spends", "payee"),
         ("spends", "note"),
-        ("spend_tags", "spend_id"),
-        ("spend_tags", "tag_id"),
+        ("spends", "tag_id"),
         ("payees", "id"),
         ("payees", "name"),
-        ("payee_tags", "payee_id"),
-        ("payee_tags", "tag_id"),
+        ("payees", "tag_id"),
     ];
 
     for (table, column) in required {
@@ -508,24 +505,15 @@ fn validate_schema(client: &mut Client) -> Result<(), AnyError> {
 fn add_spend(client: &mut Client, args: AddArgs) -> Result<(), AnyError> {
     ensure_two_decimal_places(args.amount)?;
     let timestamp = parse_optional_timestamp(args.timestamp.as_deref())?;
-    let tag_ids = if args.tag.is_empty() {
-        default_payee_tag_ids(client, &args.payee)?
-    } else {
-        existing_tag_ids(client, &args.tag, false)?
+    let tag_id = match &args.tag {
+        Some(tag) => Some(existing_tag_id(client, tag)?),
+        None => default_payee_tag_id(client, &args.payee)?,
     };
-    let mut tx = client.transaction()?;
-    let row = tx.query_one(
-        "INSERT INTO spends (timestamp, amount, payee, note) VALUES ($1, $2::numeric, $3, $4) RETURNING id",
-        &[&timestamp, &format_amount(args.amount), &args.payee, &empty_note_to_none(args.note)],
+    let row = client.query_one(
+        "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::numeric, $3, $4, $5) RETURNING id",
+        &[&timestamp, &format_amount(args.amount), &args.payee, &empty_note_to_none(args.note), &tag_id],
     )?;
     let id: i64 = row.get(0);
-    for tag_id in tag_ids.values() {
-        tx.execute(
-            "INSERT INTO spend_tags (spend_id, tag_id) VALUES ($1, $2)",
-            &[&id, tag_id],
-        )?;
-    }
-    tx.commit()?;
     println!("added spend {id}");
     Ok(())
 }
@@ -558,7 +546,10 @@ fn update_spend(client: &mut Client, args: UpdateArgs) -> Result<(), AnyError> {
         Some(timestamp) => Some(parse_timestamp(timestamp)?),
         None => None,
     };
-    let tag_ids = existing_tag_ids(client, &args.tag, false)?;
+    let tag_id = match &args.tag {
+        Some(tag) => Some(existing_tag_id(client, tag)?),
+        None => None,
+    };
 
     let mut set_parts = Vec::new();
     let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
@@ -578,9 +569,21 @@ fn update_spend(client: &mut Client, args: UpdateArgs) -> Result<(), AnyError> {
         params.push(Box::new(empty_note_to_none(Some(note))));
         set_parts.push(format!("note = ${}", params.len()));
     }
+    if args.tag.is_some() {
+        params.push(Box::new(tag_id));
+        set_parts.push(format!("tag_id = ${}", params.len()));
+    } else if args.clear_tag {
+        set_parts.push("tag_id = NULL".to_string());
+    }
 
-    let mut tx = client.transaction()?;
-    if !set_parts.is_empty() {
+    if set_parts.is_empty() {
+        if client
+            .query_opt("SELECT 1 FROM spends WHERE id = $1", &[&args.id])?
+            .is_none()
+        {
+            return Err(format!("spend {} not found", args.id).into());
+        }
+    } else {
         params.push(Box::new(args.id));
         let query = format!(
             "UPDATE spends SET {} WHERE id = ${}",
@@ -588,27 +591,11 @@ fn update_spend(client: &mut Client, args: UpdateArgs) -> Result<(), AnyError> {
             params.len()
         );
         let refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| p.as_ref()).collect();
-        let changed = tx.execute(&query, &refs)?;
+        let changed = client.execute(&query, &refs)?;
         if changed == 0 {
             return Err(format!("spend {} not found", args.id).into());
         }
-    } else if tx
-        .query_opt("SELECT 1 FROM spends WHERE id = $1", &[&args.id])?
-        .is_none()
-    {
-        return Err(format!("spend {} not found", args.id).into());
     }
-
-    if args.clear_tags || !args.tag.is_empty() {
-        tx.execute("DELETE FROM spend_tags WHERE spend_id = $1", &[&args.id])?;
-        for tag_id in tag_ids.values() {
-            tx.execute(
-                "INSERT INTO spend_tags (spend_id, tag_id) VALUES ($1, $2)",
-                &[&args.id, tag_id],
-            )?;
-        }
-    }
-    tx.commit()?;
     println!("updated spend {}", args.id);
     Ok(())
 }
@@ -688,7 +675,7 @@ fn payees_cmd(client: &mut Client, command: PayeesCommand) -> Result<(), AnyErro
                 println!("{}", serde_json::to_string_pretty(&payees)?);
             } else {
                 for payee in payees {
-                    println!("{:<32} {}", payee.name, payee.tags.join(","));
+                    println!("{:<32} {}", payee.name, payee.tag);
                 }
             }
         }
@@ -699,43 +686,26 @@ fn payees_cmd(client: &mut Client, command: PayeesCommand) -> Result<(), AnyErro
                 println!("{}", serde_json::to_string_pretty(&payee)?);
             } else {
                 println!("name: {}", payee.name);
-                println!("tags: {}", payee.tags.join(", "));
+                println!("tag: {}", payee.tag);
             }
         }
         PayeesCommand::Add(args) => {
-            let tag_ids = existing_tag_ids(client, &args.tag, false)?;
-            let mut tx = client.transaction()?;
-            let row = tx.query_one(
-                "INSERT INTO payees (name) VALUES ($1) RETURNING id",
-                &[&args.name],
+            let tag_id = existing_tag_id(client, &args.tag)?;
+            client.execute(
+                "INSERT INTO payees (name, tag_id) VALUES ($1, $2)",
+                &[&args.name, &tag_id],
             )?;
-            let payee_id: i64 = row.get(0);
-            for tag_id in tag_ids.values() {
-                tx.execute(
-                    "INSERT INTO payee_tags (payee_id, tag_id) VALUES ($1, $2)",
-                    &[&payee_id, tag_id],
-                )?;
-            }
-            tx.commit()?;
             println!("added payee {}", args.name);
         }
         PayeesCommand::Update(args) => {
-            let tag_ids = existing_tag_ids(client, &args.tag, false)?;
-            let mut tx = client.transaction()?;
-            let row = tx
-                .query_opt("SELECT id FROM payees WHERE name = $1", &[&args.name])?
-                .ok_or_else(|| format!("payee {} not found", args.name))?;
-            let payee_id: i64 = row.get(0);
-            if args.clear_tags || !args.tag.is_empty() {
-                tx.execute("DELETE FROM payee_tags WHERE payee_id = $1", &[&payee_id])?;
-                for tag_id in tag_ids.values() {
-                    tx.execute(
-                        "INSERT INTO payee_tags (payee_id, tag_id) VALUES ($1, $2)",
-                        &[&payee_id, tag_id],
-                    )?;
-                }
+            let tag_id = existing_tag_id(client, &args.tag)?;
+            let changed = client.execute(
+                "UPDATE payees SET tag_id = $1 WHERE name = $2",
+                &[&tag_id, &args.name],
+            )?;
+            if changed == 0 {
+                return Err(format!("payee {} not found", args.name).into());
             }
-            tx.commit()?;
             println!("updated payee {}", args.name);
         }
         PayeesCommand::Remove(args) => {
@@ -792,18 +762,14 @@ fn import_cmd(client: &mut Client, args: ImportArgs) -> Result<(), AnyError> {
     for item in imports {
         ensure_two_decimal_places(item.amount)?;
         let timestamp = parse_optional_timestamp(item.timestamp.as_deref())?;
-        let tag_ids = existing_tag_ids_tx(&mut tx, &item.tags, true)?;
-        let row = tx.query_one(
-            "INSERT INTO spends (timestamp, amount, payee, note) VALUES ($1, $2::numeric, $3, $4) RETURNING id",
-            &[&timestamp, &format_amount(item.amount), &item.payee, &empty_note_to_none(item.note)],
+        let tag_id = match single_import_tag(item.tag, item.tags)? {
+            Some(tag) => Some(tag_id_tx(&mut tx, &tag, true)?),
+            None => None,
+        };
+        tx.execute(
+            "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::numeric, $3, $4, $5)",
+            &[&timestamp, &format_amount(item.amount), &item.payee, &empty_note_to_none(item.note), &tag_id],
         )?;
-        let id: i64 = row.get(0);
-        for tag_id in tag_ids.values() {
-            tx.execute(
-                "INSERT INTO spend_tags (spend_id, tag_id) VALUES ($1, $2)",
-                &[&id, tag_id],
-            )?;
-        }
     }
     tx.commit()?;
     println!("imported {count} spends");
@@ -833,13 +799,10 @@ fn list_spends(client: &mut Client, args: &ListArgs) -> Result<Vec<Spend>, AnyEr
     };
     let direction = if args.desc { "DESC" } else { "ASC" };
     let mut query = format!(
-        "SELECT s.id, s.timestamp, s.amount::text, s.payee, s.note,
-            COALESCE(array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL), ARRAY[]::text[]) AS tags
+        "SELECT s.id, s.timestamp, s.amount::text, s.payee, s.note, t.name AS tag
          FROM spends s
-         LEFT JOIN spend_tags st ON st.spend_id = s.id
-         LEFT JOIN tags t ON t.id = st.tag_id
+         LEFT JOIN tags t ON t.id = s.tag_id
          {where_clause}
-         GROUP BY s.id
          ORDER BY {sort} {direction}, s.id ASC"
     );
 
@@ -862,13 +825,10 @@ fn list_spends(client: &mut Client, args: &ListArgs) -> Result<Vec<Spend>, AnyEr
 
 fn get_spend(client: &mut Client, id: i64) -> Result<Option<Spend>, AnyError> {
     let row = client.query_opt(
-        "SELECT s.id, s.timestamp, s.amount::text, s.payee, s.note,
-            COALESCE(array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL), ARRAY[]::text[]) AS tags
+        "SELECT s.id, s.timestamp, s.amount::text, s.payee, s.note, t.name AS tag
          FROM spends s
-         LEFT JOIN spend_tags st ON st.spend_id = s.id
-         LEFT JOIN tags t ON t.id = st.tag_id
-         WHERE s.id = $1
-         GROUP BY s.id",
+         LEFT JOIN tags t ON t.id = s.tag_id
+         WHERE s.id = $1",
         &[&id],
     )?;
     row.map(spend_from_row).transpose()
@@ -877,21 +837,18 @@ fn get_spend(client: &mut Client, id: i64) -> Result<Option<Spend>, AnyError> {
 fn summary(client: &mut Client, args: &SummaryArgs) -> Result<Vec<SummaryRow>, AnyError> {
     let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
     let where_clause = build_where_clause(&args.filters, &mut params)?;
-    let (select_group, join_extra) = match args.group_by {
-        GroupBy::Day => ("to_char(date_trunc('day', s.timestamp), 'YYYY-MM-DD')", ""),
-        GroupBy::Week => ("to_char(date_trunc('week', s.timestamp), 'IYYY-IW')", ""),
-        GroupBy::Month => ("to_char(date_trunc('month', s.timestamp), 'YYYY-MM')", ""),
-        GroupBy::Year => ("to_char(date_trunc('year', s.timestamp), 'YYYY')", ""),
-        GroupBy::Payee => ("s.payee", ""),
-        GroupBy::Tag => (
-            "t.name",
-            "JOIN spend_tags st ON st.spend_id = s.id JOIN tags t ON t.id = st.tag_id",
-        ),
+    let select_group = match args.group_by {
+        GroupBy::Day => "to_char(date_trunc('day', s.timestamp), 'YYYY-MM-DD')",
+        GroupBy::Week => "to_char(date_trunc('week', s.timestamp), 'IYYY-IW')",
+        GroupBy::Month => "to_char(date_trunc('month', s.timestamp), 'YYYY-MM')",
+        GroupBy::Year => "to_char(date_trunc('year', s.timestamp), 'YYYY')",
+        GroupBy::Payee => "s.payee",
+        GroupBy::Tag => "COALESCE(t.name, 'Untagged')",
     };
     let query = format!(
-        "SELECT {select_group} AS group_name, SUM(s.amount)::text AS total, COUNT(DISTINCT s.id) AS count
+        "SELECT {select_group} AS group_name, SUM(s.amount)::text AS total, COUNT(s.id) AS count
          FROM spends s
-         {join_extra}
+         LEFT JOIN tags t ON t.id = s.tag_id
          {where_clause}
          GROUP BY group_name
          ORDER BY group_name"
@@ -913,12 +870,9 @@ fn build_where_clause(
     params: &mut Vec<Box<dyn ToSql + Sync>>,
 ) -> Result<String, AnyError> {
     let mut parts = Vec::new();
-    for tag in &filters.tag {
+    if let Some(tag) = &filters.tag {
         params.push(Box::new(tag.clone()));
-        parts.push(format!(
-            "EXISTS (SELECT 1 FROM spend_tags fst JOIN tags ft ON ft.id = fst.tag_id WHERE fst.spend_id = s.id AND ft.name = ${})",
-            params.len()
-        ));
+        parts.push(format!("t.name = ${}", params.len()));
     }
     if let Some(payee) = &filters.payee {
         params.push(Box::new(payee.clone()));
@@ -964,41 +918,30 @@ fn validate_filters(filters: &FilterArgs) -> Result<(), AnyError> {
     Ok(())
 }
 
-fn existing_tag_ids(
-    client: &mut Client,
-    tags: &[String],
-    create_missing: bool,
-) -> Result<std::collections::HashMap<String, i64>, AnyError> {
-    let mut tx = client.transaction()?;
-    let ids = existing_tag_ids_tx(&mut tx, tags, create_missing)?;
-    tx.commit()?;
-    Ok(ids)
+fn existing_tag_id(client: &mut Client, tag: &str) -> Result<i64, AnyError> {
+    client
+        .query_opt("SELECT id FROM tags WHERE name = $1", &[&tag])?
+        .map(|row| row.get(0))
+        .ok_or_else(|| format!("unknown tag: {tag}").into())
 }
 
-fn existing_tag_ids_tx(
+fn tag_id_tx(
     tx: &mut postgres::Transaction<'_>,
-    tags: &[String],
+    tag: &str,
     create_missing: bool,
-) -> Result<std::collections::HashMap<String, i64>, AnyError> {
-    let mut ids = std::collections::HashMap::new();
-    for tag in tags {
-        if ids.contains_key(tag) {
-            continue;
-        }
-        let row = if create_missing {
-            tx.query_one(
-                "INSERT INTO tags (name) VALUES ($1)
-                 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-                 RETURNING id",
-                &[tag],
-            )?
-        } else {
-            tx.query_opt("SELECT id FROM tags WHERE name = $1", &[tag])?
-                .ok_or_else(|| format!("unknown tag: {tag}"))?
-        };
-        ids.insert(tag.clone(), row.get(0));
-    }
-    Ok(ids)
+) -> Result<i64, AnyError> {
+    let row = if create_missing {
+        tx.query_one(
+            "INSERT INTO tags (name) VALUES ($1)
+             ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+             RETURNING id",
+            &[&tag],
+        )?
+    } else {
+        tx.query_opt("SELECT id FROM tags WHERE name = $1", &[&tag])?
+            .ok_or_else(|| format!("unknown tag: {tag}"))?
+    };
+    Ok(row.get(0))
 }
 
 fn missing_tags(client: &mut Client, tags: &[String]) -> Result<Vec<String>, AnyError> {
@@ -1014,34 +957,18 @@ fn missing_tags(client: &mut Client, tags: &[String]) -> Result<Vec<String>, Any
     Ok(missing)
 }
 
-fn default_payee_tag_ids(
-    client: &mut Client,
-    payee: &str,
-) -> Result<std::collections::HashMap<String, i64>, AnyError> {
-    let mut ids = std::collections::HashMap::new();
-    for row in client.query(
-        "SELECT t.name, t.id
-         FROM payees p
-         JOIN payee_tags pt ON pt.payee_id = p.id
-         JOIN tags t ON t.id = pt.tag_id
-         WHERE p.name = $1
-         ORDER BY t.name",
-        &[&payee],
-    )? {
-        ids.insert(row.get(0), row.get(1));
-    }
-    Ok(ids)
+fn default_payee_tag_id(client: &mut Client, payee: &str) -> Result<Option<i64>, AnyError> {
+    Ok(client
+        .query_opt("SELECT tag_id FROM payees WHERE name = $1", &[&payee])?
+        .map(|row| row.get(0)))
 }
 
 fn list_payees(client: &mut Client) -> Result<Vec<PayeeRule>, AnyError> {
     client
         .query(
-            "SELECT p.id, p.name,
-                COALESCE(array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL), ARRAY[]::text[]) AS tags
+            "SELECT p.id, p.name, t.name
              FROM payees p
-             LEFT JOIN payee_tags pt ON pt.payee_id = p.id
-             LEFT JOIN tags t ON t.id = pt.tag_id
-             GROUP BY p.id
+             JOIN tags t ON t.id = p.tag_id
              ORDER BY p.name",
             &[],
         )?
@@ -1053,13 +980,10 @@ fn list_payees(client: &mut Client) -> Result<Vec<PayeeRule>, AnyError> {
 fn get_payee_rule(client: &mut Client, name: &str) -> Result<Option<PayeeRule>, AnyError> {
     client
         .query_opt(
-            "SELECT p.id, p.name,
-                COALESCE(array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL), ARRAY[]::text[]) AS tags
+            "SELECT p.id, p.name, t.name
              FROM payees p
-             LEFT JOIN payee_tags pt ON pt.payee_id = p.id
-             LEFT JOIN tags t ON t.id = pt.tag_id
-             WHERE p.name = $1
-             GROUP BY p.id",
+             JOIN tags t ON t.id = p.tag_id
+             WHERE p.name = $1",
             &[&name],
         )?
         .map(payee_rule_from_row)
@@ -1070,7 +994,7 @@ fn payee_rule_from_row(row: Row) -> Result<PayeeRule, AnyError> {
     Ok(PayeeRule {
         id: row.get(0),
         name: row.get(1),
-        tags: row.get(2),
+        tag: row.get(2),
     })
 }
 
@@ -1081,7 +1005,7 @@ fn spend_from_row(row: Row) -> Result<Spend, AnyError> {
         amount: Decimal::from_str(row.get::<_, String>(2).as_str())?,
         payee: row.get(3),
         note: row.get(4),
-        tags: row.get(5),
+        tag: row.get(5),
     })
 }
 
@@ -1093,13 +1017,13 @@ fn print_spend(spend: &Spend) {
     if let Some(note) = &spend.note {
         println!("note: {note}");
     }
-    println!("tags: {}", spend.tags.join(", "));
+    println!("tag: {}", spend.tag.as_deref().unwrap_or("Untagged"));
 }
 
 fn print_spends_table(spends: &[Spend]) {
     println!(
         "{:<6} {:<25} {:>12} {:<24} {}",
-        "id", "timestamp", "amount", "payee", "tags"
+        "id", "timestamp", "amount", "payee", "tag"
     );
     for spend in spends {
         println!(
@@ -1108,14 +1032,14 @@ fn print_spends_table(spends: &[Spend]) {
             spend.timestamp.to_rfc3339(),
             format_amount(spend.amount),
             truncate(&spend.payee, 24),
-            spend.tags.join(",")
+            spend.tag.as_deref().unwrap_or("Untagged")
         );
     }
 }
 
 fn write_spends_csv(spends: &[Spend]) -> Result<(), AnyError> {
     let mut writer = csv::Writer::from_writer(io::stdout());
-    writer.write_record(["id", "timestamp", "amount", "payee", "note", "tags"])?;
+    writer.write_record(["id", "timestamp", "amount", "payee", "note", "tag"])?;
     for spend in spends {
         writer.write_record([
             spend.id.to_string(),
@@ -1123,7 +1047,7 @@ fn write_spends_csv(spends: &[Spend]) -> Result<(), AnyError> {
             format_amount(spend.amount),
             spend.payee.clone(),
             spend.note.clone().unwrap_or_default(),
-            spend.tags.join(";"),
+            spend.tag.clone().unwrap_or_default(),
         ])?;
     }
     writer.flush()?;
@@ -1145,6 +1069,7 @@ fn read_csv_import(path: &Path) -> Result<Vec<ImportSpend>, AnyError> {
             payee: row.payee,
             timestamp: row.timestamp,
             note: row.note,
+            tag: row.tag,
             tags: row
                 .tags
                 .unwrap_or_default()
@@ -1156,6 +1081,20 @@ fn read_csv_import(path: &Path) -> Result<Vec<ImportSpend>, AnyError> {
         });
     }
     Ok(imports)
+}
+
+fn single_import_tag(tag: Option<String>, tags: Vec<String>) -> Result<Option<String>, AnyError> {
+    let tag = tag.filter(|tag| !tag.trim().is_empty());
+    if tags.is_empty() {
+        return Ok(tag);
+    }
+    if tag.is_some() {
+        return Err("import row cannot contain both tag and tags".into());
+    }
+    if tags.len() > 1 {
+        return Err("import row has multiple tags; only one tag per spend is allowed".into());
+    }
+    Ok(tags.into_iter().next())
 }
 
 fn infer_format(path: &Path) -> Option<DataFormat> {
