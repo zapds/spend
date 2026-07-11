@@ -7,9 +7,10 @@ import { PayeeRuleDialog } from "@/components/payee-rule-dialog"
 import { TagSelect } from "@/components/tag-select"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { formatDateTime, formatMoney } from "@/lib/format"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { formatExactDateTime, formatMoney, formatRelativeTime } from "@/lib/format"
 import type { TransactionRow } from "@/lib/types"
 
 type ReviewSpend = TransactionRow & { default_tag: string | null }
@@ -39,12 +40,12 @@ export function ReviewClient() {
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
       <div className="space-y-4">
-        <Queue title="Last 10 spends" description="Newest records for quick sanity checks." spends={data.last} onChanged={load} onCreatePayee={setPayeeDialog} />
-        <Queue title="Untagged spends" description="Give each spend one tag or leave it intentionally untagged." spends={data.untagged} onChanged={load} onCreatePayee={setPayeeDialog} />
-        <Queue title="Missing notes" description="Add short context for records that need memory." spends={data.missingNotes} onChanged={load} onCreatePayee={setPayeeDialog} />
+        <Queue title="Last 10 spends" spends={data.last} onChanged={load} onCreatePayee={setPayeeDialog} />
+        <Queue title="Untagged spends" spends={data.untagged} onChanged={load} onCreatePayee={setPayeeDialog} />
+        <Queue title="Missing notes" spends={data.missingNotes} onChanged={load} onCreatePayee={setPayeeDialog} />
       </div>
       <Card className="h-fit border-0 bg-card/70">
-        <CardHeader><CardTitle>Unknown payees</CardTitle><CardDescription>Create exact-match defaults from recurring merchants.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Unknown payees</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           {data.unknownPayees.map((payee) => (
             <div key={payee.payee} className="rounded-xl bg-muted/30 p-3">
@@ -61,10 +62,10 @@ export function ReviewClient() {
   )
 }
 
-function Queue({ title, description, spends, onChanged, onCreatePayee }: { title: string; description: string; spends: ReviewSpend[]; onChanged: () => void; onCreatePayee: (payee: string) => void }) {
+function Queue({ title, spends, onChanged, onCreatePayee }: { title: string; spends: ReviewSpend[]; onChanged: () => void; onCreatePayee: (payee: string) => void }) {
   return (
     <Card className="border-0 bg-card/70">
-      <CardHeader><CardTitle>{title}</CardTitle><CardDescription>{description}</CardDescription></CardHeader>
+      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
       <CardContent className="space-y-2">
         {spends.map((spend) => <SpendReviewRow key={`${title}-${spend.id}`} spend={spend} onChanged={onChanged} onCreatePayee={onCreatePayee} />)}
         {!spends.length ? <div className="rounded-xl bg-muted/20 p-6 text-center text-sm text-muted-foreground">Queue is clear.</div> : null}
@@ -97,11 +98,23 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
   }
 
   return (
-    <div className="rounded-xl bg-muted/25 p-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{spend.payee}</span>{spend.tag ? <Badge variant="secondary">{spend.tag}</Badge> : <Badge variant="outline">Untagged</Badge>}{spend.default_tag ? <span className="text-xs text-muted-foreground">default: {spend.default_tag}</span> : null}</div>
-          <div className="mt-1 text-xs text-muted-foreground">{formatDateTime(spend.timestamp)} · <span className="font-mono">{formatMoney(spend.amount)}</span></div>
+    <div className="rounded-xl bg-muted/25 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 space-y-2">
+          <div className="font-mono text-3xl font-semibold tracking-tight text-foreground">{formatMoney(spend.amount)}</div>
+          <div className="min-w-0">
+            <div className="truncate font-medium">{spend.payee}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button className="underline-offset-2 hover:underline" type="button">{formatRelativeTime(spend.timestamp)}</button>
+                </TooltipTrigger>
+                <TooltipContent>{formatExactDateTime(spend.timestamp)}</TooltipContent>
+              </Tooltip>
+              {spend.tag ? <Badge variant="secondary">{spend.tag}</Badge> : <Badge variant="outline">Untagged</Badge>}
+              {spend.default_tag ? <span>default: {spend.default_tag}</span> : null}
+            </div>
+          </div>
         </div>
         <Button size="sm" variant="secondary" onClick={() => onCreatePayee(spend.payee)}>Payee default</Button>
       </div>

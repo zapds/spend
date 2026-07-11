@@ -14,8 +14,7 @@ export function MetricCard({ title, metric }: { title: string; metric?: MetricCa
       </CardHeader>
       <CardContent>
         <div className="font-mono text-3xl font-semibold tracking-tight">{formatMoney(metric?.amount ?? 0)}</div>
-        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-          <span>{metric?.count ?? 0} transactions</span>
+        <div className="mt-3 flex items-center justify-end text-xs text-muted-foreground">
           <span className={up ? "flex items-center gap-1 text-red-400" : "flex items-center gap-1 text-green-400"}>
             <Icon className="size-3.5" />
             {formatPercent(metric?.deltaPercent)}

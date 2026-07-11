@@ -4,7 +4,7 @@ import * as React from "react"
 import { LockKeyhole } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
@@ -55,7 +55,6 @@ export function PasswordGate({ children }: { children: React.ReactNode }) {
           </div>
           <div>
             <CardTitle>Unlock spend desk</CardTitle>
-            <CardDescription>Personal-use password gate. The unlock is stored locally in this browser.</CardDescription>
           </div>
         </CardHeader>
         <CardContent>

@@ -4,7 +4,7 @@ import * as React from "react"
 
 import { lockDashboard } from "@/components/password-gate"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
@@ -23,20 +23,20 @@ export function SettingsClient() {
   return (
     <div className="grid max-w-4xl gap-4">
       <Card className="border-0 bg-card/70">
-        <CardHeader><CardTitle>Preferences</CardTitle><CardDescription>Stored locally for this personal dashboard.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Preferences</CardTitle></CardHeader>
         <CardContent className="space-y-5">
-          <div className="flex items-center justify-between gap-4"><div><Label>Compact density</Label><p className="text-sm text-muted-foreground">Tighten rows and cards. UI hook is ready for future persistence.</p></div><Switch /></div>
+          <div className="flex items-center justify-between gap-4"><Label>Compact density</Label><Switch /></div>
           <Separator />
           <div className="grid gap-2"><Label>Default date range</Label><Select defaultValue="last_30_days"><SelectTrigger className="max-w-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="last_30_days">Last 30 days</SelectItem><SelectItem value="this_month">This month</SelectItem><SelectItem value="this_week">This week</SelectItem></SelectContent></Select></div>
-          <div className="grid gap-1"><Label>Currency</Label><p className="text-sm text-muted-foreground">Amounts are always shown in Indian rupees (₹).</p></div>
+          <div className="grid gap-1"><Label>Currency</Label><div className="text-sm">₹</div></div>
         </CardContent>
       </Card>
       <Card className="border-0 bg-card/70">
-        <CardHeader><CardTitle>Database status</CardTitle><CardDescription>Secrets are never displayed.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Database status</CardTitle></CardHeader>
         <CardContent><div className="rounded-xl bg-muted/30 p-4 font-mono text-sm">{status}</div></CardContent>
       </Card>
       <Card className="border-0 bg-card/70">
-        <CardHeader><CardTitle>Lock dashboard</CardTitle><CardDescription>Clears the local unlock flag and returns to the password gate.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Lock dashboard</CardTitle></CardHeader>
         <CardContent><Button variant="destructive" onClick={lockDashboard}>Lock dashboard</Button></CardContent>
       </Card>
     </div>

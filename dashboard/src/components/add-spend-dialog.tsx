@@ -5,7 +5,7 @@ import { toast } from "sonner"
 
 import { TagSelect } from "@/components/tag-select"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -70,9 +70,6 @@ export function AddSpendDialog({
       <DialogContent className="border-0 bg-card sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add spend</DialogTitle>
-          <DialogDescription>
-            Explicit tag wins. If omitted, an exact known payee rule can provide the default tag.
-          </DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={onSubmit}>
           <div className="grid gap-4 sm:grid-cols-2">

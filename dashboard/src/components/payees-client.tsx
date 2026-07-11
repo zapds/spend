@@ -7,7 +7,7 @@ import { toast } from "sonner"
 import { PayeeRuleDialog, type PayeeRule } from "@/components/payee-rule-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatDateTime, formatMoney } from "@/lib/format"
 
@@ -54,7 +54,7 @@ export function PayeesClient() {
     <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
       <Card className="border-0 bg-card/70">
         <CardHeader className="flex-row items-start justify-between gap-4">
-          <div><CardTitle>Known payees</CardTitle><CardDescription>Rules use exact payee text and always require one default tag.</CardDescription></div>
+          <CardTitle>Known payees</CardTitle>
           <Button onClick={() => openAdd()}><Plus className="size-4" /> Add payee</Button>
         </CardHeader>
         <CardContent>
@@ -79,7 +79,7 @@ export function PayeesClient() {
         </CardContent>
       </Card>
       <Card className="border-0 bg-card/70">
-        <CardHeader><CardTitle>Suggested rules</CardTitle><CardDescription>Frequent payees without a default.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Suggested rules</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           {suggestions.map((item) => (
             <div key={item.payee} className="rounded-xl bg-muted/30 p-3">

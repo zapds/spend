@@ -5,7 +5,7 @@ import { toast } from "sonner"
 
 import { TagSelect } from "@/components/tag-select"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
@@ -62,7 +62,6 @@ export function PayeeRuleDialog({
       <DialogContent className="border-0 bg-card">
         <DialogHeader>
           <DialogTitle>{rule ? "Edit payee rule" : "Add payee rule"}</DialogTitle>
-          <DialogDescription>Exact, case-sensitive payee match. A default tag is required.</DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={save}>
           <div className="space-y-2"><Label>Payee name</Label><Input value={name} onChange={(event) => setName(event.target.value)} required /></div>

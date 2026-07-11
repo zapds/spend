@@ -64,7 +64,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
               <div className="leading-tight">
                 <div className="text-sm font-semibold">spend</div>
-                <div className="text-xs text-muted-foreground">personal ledger</div>
               </div>
             </div>
           </SidebarHeader>
@@ -96,7 +95,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <SidebarTrigger />
             <div className="min-w-0 flex-1">
               <h1 className="truncate text-sm font-semibold tracking-tight md:text-base">{title}</h1>
-              <p className="hidden text-xs text-muted-foreground md:block">Exact payees, single tags, fast review.</p>
             </div>
             <div className={cn("hidden md:block", pathname === "/settings" && "invisible")}>
               <DateRangeControls searchParams={searchParams} />

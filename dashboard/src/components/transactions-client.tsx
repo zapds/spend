@@ -8,7 +8,7 @@ import { toast } from "sonner"
 import { TagSelect, useTags } from "@/components/tag-select"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
@@ -73,7 +73,6 @@ export function TransactionsClient() {
       <Card className="border-0 bg-card/70">
         <CardHeader>
           <CardTitle>Transactions</CardTitle>
-          <CardDescription>Filter, sort, and clean up spend records. Date range comes from the toolbar.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-2 md:grid-cols-6">

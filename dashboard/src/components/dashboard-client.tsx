@@ -67,12 +67,12 @@ export function DashboardClient() {
   return (
     <div className="space-y-5">
       <section className="grid gap-4 md:grid-cols-3">
-        <MetricCard title="Spent today" metric={data?.kpis.today} />
-        <MetricCard title="Spent this week" metric={data?.kpis.week} />
-        <MetricCard title="Spent this month" metric={data?.kpis.month} />
+        <MetricCard title="Today" metric={data?.kpis.today} />
+        <MetricCard title="This week" metric={data?.kpis.week} />
+        <MetricCard title="This month" metric={data?.kpis.month} />
       </section>
       <section className="grid gap-4 xl:grid-cols-2">
-        <ChartCard title="Spend by tag" description="Filtered range, grouped by the spend tag.">
+        <ChartCard title="Spend by tag">
           {data?.tagBars.length ? (
             <ChartContainer className="h-[300px] w-full" config={barConfig}>
               <BarChart accessibilityLayer data={data.tagBars} layout="vertical" margin={{ left: 8, right: 24 }}>
@@ -85,7 +85,7 @@ export function DashboardClient() {
             </ChartContainer>
           ) : <EmptyState text="No spends in this range." />}
         </ChartCard>
-        <ChartCard title="Spend by payee" description="Top merchants for the selected range.">
+        <ChartCard title="Spend by payee">
           {data?.payeeBars.length ? (
             <ChartContainer className="h-[300px] w-full" config={barConfig}>
               <BarChart accessibilityLayer data={data.payeeBars} layout="vertical" margin={{ left: 8, right: 24 }}>
@@ -99,7 +99,7 @@ export function DashboardClient() {
           ) : <EmptyState text="No payee data in this range." />}
         </ChartCard>
       </section>
-      <ChartCard title="Tag trend" description="Daily movement for the top tags.">
+      <ChartCard title="Tag trend">
         {data?.tagTrend.length && data.trendKeys.length ? (
           <ChartContainer className="h-[320px] w-full" config={trendConfig}>
             <LineChart accessibilityLayer data={data.tagTrend} margin={{ left: 12, right: 18 }}>
@@ -118,12 +118,11 @@ export function DashboardClient() {
   )
 }
 
-function ChartCard({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
+function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Card className="border-0 bg-card/70 ring-0">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
