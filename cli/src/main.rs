@@ -509,10 +509,18 @@ fn add_spend(client: &mut Client, args: AddArgs) -> Result<(), AnyError> {
         Some(tag) => Some(existing_tag_id(client, tag)?),
         None => default_payee_tag_id(client, &args.payee)?,
     };
-    let row = client.query_one(
-        "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::numeric, $3, $4, $5) RETURNING id",
-        &[&timestamp, &format_amount(args.amount), &args.payee, &empty_note_to_none(args.note), &tag_id],
-    )?;
+    let amount = format_amount(args.amount);
+    let note = empty_note_to_none(args.note);
+    let row = match timestamp {
+        Some(timestamp) => client.query_one(
+            "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::numeric, $3, $4, $5) RETURNING id",
+            &[&timestamp, &amount, &args.payee, &note, &tag_id],
+        )?,
+        None => client.query_one(
+            "INSERT INTO spends (amount, payee, note, tag_id) VALUES ($1::numeric, $2, $3, $4) RETURNING id",
+            &[&amount, &args.payee, &note, &tag_id],
+        )?,
+    };
     let id: i64 = row.get(0);
     println!("added spend {id}");
     Ok(())
@@ -766,10 +774,22 @@ fn import_cmd(client: &mut Client, args: ImportArgs) -> Result<(), AnyError> {
             Some(tag) => Some(tag_id_tx(&mut tx, &tag, true)?),
             None => None,
         };
-        tx.execute(
-            "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::numeric, $3, $4, $5)",
-            &[&timestamp, &format_amount(item.amount), &item.payee, &empty_note_to_none(item.note), &tag_id],
-        )?;
+        let amount = format_amount(item.amount);
+        let note = empty_note_to_none(item.note);
+        match timestamp {
+            Some(timestamp) => {
+                tx.execute(
+                    "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::numeric, $3, $4, $5)",
+                    &[&timestamp, &amount, &item.payee, &note, &tag_id],
+                )?;
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO spends (amount, payee, note, tag_id) VALUES ($1::numeric, $2, $3, $4)",
+                    &[&amount, &item.payee, &note, &tag_id],
+                )?;
+            }
+        }
     }
     tx.commit()?;
     println!("imported {count} spends");
