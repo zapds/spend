@@ -105,7 +105,7 @@ export function DashboardClient() {
             <LineChart accessibilityLayer data={data.tagTrend} margin={{ left: 12, right: 18 }}>
               <CartesianGrid vertical={false} strokeDasharray="3 3" />
               <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={30} />
-              <YAxis tickLine={false} axisLine={false} width={70} tickFormatter={(value) => `$${value}`} />
+              <YAxis tickLine={false} axisLine={false} width={70} tickFormatter={(value) => formatMoney(Number(value))} />
               <ChartTooltip content={<ChartTooltipContent />} />
               {data.trendKeys.map((key, index) => (
                 <Line key={key} dataKey={key} type="monotone" stroke={`var(--chart-${(index % 5) + 1})`} strokeWidth={2} dot={false} connectNulls />

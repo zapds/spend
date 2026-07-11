@@ -1,6 +1,6 @@
-export function formatMoney(value: number | string | null | undefined, prefix = "$") {
+export function formatMoney(value: number | string | null | undefined) {
   const amount = Number(value ?? 0)
-  return `${prefix}${amount.toLocaleString(undefined, {
+  return `₹${amount.toLocaleString("en-IN", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`
