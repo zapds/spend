@@ -513,11 +513,11 @@ fn add_spend(client: &mut Client, args: AddArgs) -> Result<(), AnyError> {
     let note = empty_note_to_none(args.note);
     let row = match timestamp {
         Some(timestamp) => client.query_one(
-            "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::numeric, $3, $4, $5) RETURNING id",
+            "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::text::numeric, $3, $4, $5) RETURNING id",
             &[&timestamp, &amount, &args.payee, &note, &tag_id],
         )?,
         None => client.query_one(
-            "INSERT INTO spends (amount, payee, note, tag_id) VALUES ($1::numeric, $2, $3, $4) RETURNING id",
+            "INSERT INTO spends (amount, payee, note, tag_id) VALUES ($1::text::numeric, $2, $3, $4) RETURNING id",
             &[&amount, &args.payee, &note, &tag_id],
         )?,
     };
@@ -563,7 +563,7 @@ fn update_spend(client: &mut Client, args: UpdateArgs) -> Result<(), AnyError> {
     let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
     if let Some(amount) = args.amount {
         params.push(Box::new(format_amount(amount)));
-        set_parts.push(format!("amount = ${}::numeric", params.len()));
+        set_parts.push(format!("amount = ${}::text::numeric", params.len()));
     }
     if let Some(payee) = args.payee {
         params.push(Box::new(payee));
@@ -779,13 +779,13 @@ fn import_cmd(client: &mut Client, args: ImportArgs) -> Result<(), AnyError> {
         match timestamp {
             Some(timestamp) => {
                 tx.execute(
-                    "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::numeric, $3, $4, $5)",
+                    "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::text::numeric, $3, $4, $5)",
                     &[&timestamp, &amount, &item.payee, &note, &tag_id],
                 )?;
             }
             None => {
                 tx.execute(
-                    "INSERT INTO spends (amount, payee, note, tag_id) VALUES ($1::numeric, $2, $3, $4)",
+                    "INSERT INTO spends (amount, payee, note, tag_id) VALUES ($1::text::numeric, $2, $3, $4)",
                     &[&amount, &item.payee, &note, &tag_id],
                 )?;
             }
@@ -915,11 +915,11 @@ fn build_where_clause(
     }
     if let Some(amount_min) = filters.amount_min {
         params.push(Box::new(format_amount(amount_min)));
-        parts.push(format!("s.amount >= ${}::numeric", params.len()));
+        parts.push(format!("s.amount >= ${}::text::numeric", params.len()));
     }
     if let Some(amount_max) = filters.amount_max {
         params.push(Box::new(format_amount(amount_max)));
-        parts.push(format!("s.amount <= ${}::numeric", params.len()));
+        parts.push(format!("s.amount <= ${}::text::numeric", params.len()));
     }
     if parts.is_empty() {
         Ok(String::new())
