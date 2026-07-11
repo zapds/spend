@@ -23,7 +23,7 @@ const HELP_TEMPLATE: &str =
     about = "Agent-friendly CLI for recording and querying spending in PostgreSQL.",
     long_about = "spend is designed for programmatic use by agents. Commands use explicit flags, repeatable --tag filters, and consistent output switches. Database connection settings are read from ~/.config/spend/config.json.",
     help_template = HELP_TEMPLATE,
-    after_help = "CONFIG:\n    ~/.config/spend/config.json must contain { \"database_url\": \"postgres://...\" }.\n\nSCHEMA:\n    spend fails if the required PostgreSQL schema is missing. The spends table must include optional note TEXT support.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend list --tag food --date-start 2026-06-01 --date-end 2026-06-30 --json\n    spend summary --group-by month\n    spend validate-tags --tag food --tag unknown"
+    after_help = "CONFIG:\n    ~/.config/spend/config.json must contain { \"database_url\": \"postgres://...\" }.\n\nSCHEMA:\n    spend fails if the required PostgreSQL schema is missing. The spends table must include optional note TEXT support plus payee default-tag tables.\n\nPAYEE DEFAULTS:\n    Known payees can have default tags. spend add uses those defaults only when no explicit --tag is passed.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend payees add --name Uber --tag transport\n    spend list --tag food --date-start 2026-06-01 --date-end 2026-06-30 --json\n    spend summary --group-by month\n    spend validate-tags --tag food --tag unknown"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -32,9 +32,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Add one spend. Tags must already exist.
+    /// Add one spend. Explicit tags override known payee default tags for this spend only.
     #[command(
-        after_help = "EXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend add --amount 430.50 --payee Domino's --tag food --tag friends --note 'late dinner'\n    spend add --amount 1200 --payee Amazon --timestamp 2026-06-24T20:15:00+05:30"
+        after_help = "PAYEE DEFAULTS:\n    If --tag is omitted and --payee exactly matches a known payee, that payee's default tags are attached. If any --tag is provided, only the explicit tags are used.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend add --amount 430.50 --payee Domino's --tag food --tag friends --note 'late dinner'\n    spend add --amount 1200 --payee Amazon --timestamp 2026-06-24T20:15:00+05:30"
     )]
     Add(AddArgs),
 
@@ -68,6 +68,13 @@ enum Command {
     #[command(subcommand)]
     Tags(TagsCommand),
 
+    /// Manage known payees and default tags used by spend add.
+    #[command(
+        subcommand,
+        after_help = "BEHAVIOR:\n    Payee names match exactly. spend add applies a known payee's default tags only when no explicit --tag is passed. Explicit --tag values override defaults for that spend only.\n\nEXAMPLES:\n    spend payees list --json\n    spend payees add --name Uber --tag transport\n    spend payees update --name Uber --clear-tags --tag transport --tag work\n    spend payees get --name Uber --json"
+    )]
+    Payees(PayeesCommand),
+
     /// Export spends as CSV or JSON. Uses the same filters as list/summary.
     #[command(
         after_help = "EXAMPLES:\n    spend export --format csv --tag food\n    spend export --format json --date-start 2026-01-01"
@@ -98,6 +105,22 @@ enum TagsCommand {
     Remove(TagNameArgs),
     /// Rename one tag.
     Rename(TagRenameArgs),
+}
+
+#[derive(Subcommand)]
+enum PayeesCommand {
+    /// List known payees and their default tags.
+    List(OutputJsonArgs),
+    /// Show one known payee and its default tags.
+    Get(PayeeGetArgs),
+    /// Add one known payee. Tags must already exist.
+    Add(PayeeAddArgs),
+    /// Replace default tags for one known payee.
+    Update(PayeeUpdateArgs),
+    /// Remove one known payee rule. Historical spends are unchanged.
+    Remove(PayeeNameArgs),
+    /// Rename one known payee rule.
+    Rename(PayeeRenameArgs),
 }
 
 #[derive(Args)]
@@ -272,6 +295,63 @@ struct TagRenameArgs {
     new: String,
 }
 
+#[derive(Args)]
+struct OutputJsonArgs {
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct PayeeGetArgs {
+    /// Exact payee name.
+    #[arg(long)]
+    name: String,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct PayeeAddArgs {
+    /// Exact payee name to match during spend add.
+    #[arg(long)]
+    name: String,
+    /// Existing default tag. Repeat --tag for multiple tags.
+    #[arg(long, required = true)]
+    tag: Vec<String>,
+}
+
+#[derive(Args)]
+struct PayeeUpdateArgs {
+    /// Exact payee name.
+    #[arg(long)]
+    name: String,
+    /// Remove current default tags before applying provided --tag values.
+    #[arg(long)]
+    clear_tags: bool,
+    /// Existing default tag. Repeat --tag for multiple tags.
+    #[arg(long)]
+    tag: Vec<String>,
+}
+
+#[derive(Args)]
+struct PayeeNameArgs {
+    /// Exact payee name.
+    #[arg(long)]
+    name: String,
+}
+
+#[derive(Args)]
+struct PayeeRenameArgs {
+    /// Existing exact payee name.
+    #[arg(long)]
+    old: String,
+    /// New exact payee name.
+    #[arg(long)]
+    new: String,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum SortField {
     Amount,
@@ -338,6 +418,13 @@ struct SummaryRow {
     count: i64,
 }
 
+#[derive(Serialize)]
+struct PayeeRule {
+    id: i64,
+    name: String,
+    tags: Vec<String>,
+}
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
@@ -359,6 +446,7 @@ fn run() -> Result<(), AnyError> {
         Command::List(args) => list_spends_cmd(&mut client, args)?,
         Command::Summary(args) => summary_cmd(&mut client, args)?,
         Command::Tags(command) => tags_cmd(&mut client, command)?,
+        Command::Payees(command) => payees_cmd(&mut client, command)?,
         Command::Export(args) => export_cmd(&mut client, args)?,
         Command::Import(args) => import_cmd(&mut client, args)?,
         Command::ValidateTags(args) => validate_tags_cmd(&mut client, args.tag)?,
@@ -393,6 +481,10 @@ fn validate_schema(client: &mut Client) -> Result<(), AnyError> {
         ("spends", "note"),
         ("spend_tags", "spend_id"),
         ("spend_tags", "tag_id"),
+        ("payees", "id"),
+        ("payees", "name"),
+        ("payee_tags", "payee_id"),
+        ("payee_tags", "tag_id"),
     ];
 
     for (table, column) in required {
@@ -416,7 +508,11 @@ fn validate_schema(client: &mut Client) -> Result<(), AnyError> {
 fn add_spend(client: &mut Client, args: AddArgs) -> Result<(), AnyError> {
     ensure_two_decimal_places(args.amount)?;
     let timestamp = parse_optional_timestamp(args.timestamp.as_deref())?;
-    let tag_ids = existing_tag_ids(client, &args.tag, false)?;
+    let tag_ids = if args.tag.is_empty() {
+        default_payee_tag_ids(client, &args.payee)?
+    } else {
+        existing_tag_ids(client, &args.tag, false)?
+    };
     let mut tx = client.transaction()?;
     let row = tx.query_one(
         "INSERT INTO spends (timestamp, amount, payee, note) VALUES ($1, $2::numeric, $3, $4) RETURNING id",
@@ -458,7 +554,10 @@ fn update_spend(client: &mut Client, args: UpdateArgs) -> Result<(), AnyError> {
     if let Some(amount) = args.amount {
         ensure_two_decimal_places(amount)?;
     }
-    let timestamp = parse_optional_timestamp(args.timestamp.as_deref())?;
+    let timestamp = match args.timestamp.as_deref() {
+        Some(timestamp) => Some(parse_timestamp(timestamp)?),
+        None => None,
+    };
     let tag_ids = existing_tag_ids(client, &args.tag, false)?;
 
     let mut set_parts = Vec::new();
@@ -576,6 +675,85 @@ fn tags_cmd(client: &mut Client, command: TagsCommand) -> Result<(), AnyError> {
                 return Err(format!("tag {} not found", args.old).into());
             }
             println!("renamed tag {} to {}", args.old, args.new);
+        }
+    }
+    Ok(())
+}
+
+fn payees_cmd(client: &mut Client, command: PayeesCommand) -> Result<(), AnyError> {
+    match command {
+        PayeesCommand::List(args) => {
+            let payees = list_payees(client)?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&payees)?);
+            } else {
+                for payee in payees {
+                    println!("{:<32} {}", payee.name, payee.tags.join(","));
+                }
+            }
+        }
+        PayeesCommand::Get(args) => {
+            let payee = get_payee_rule(client, &args.name)?
+                .ok_or_else(|| format!("payee {} not found", args.name))?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&payee)?);
+            } else {
+                println!("name: {}", payee.name);
+                println!("tags: {}", payee.tags.join(", "));
+            }
+        }
+        PayeesCommand::Add(args) => {
+            let tag_ids = existing_tag_ids(client, &args.tag, false)?;
+            let mut tx = client.transaction()?;
+            let row = tx.query_one(
+                "INSERT INTO payees (name) VALUES ($1) RETURNING id",
+                &[&args.name],
+            )?;
+            let payee_id: i64 = row.get(0);
+            for tag_id in tag_ids.values() {
+                tx.execute(
+                    "INSERT INTO payee_tags (payee_id, tag_id) VALUES ($1, $2)",
+                    &[&payee_id, tag_id],
+                )?;
+            }
+            tx.commit()?;
+            println!("added payee {}", args.name);
+        }
+        PayeesCommand::Update(args) => {
+            let tag_ids = existing_tag_ids(client, &args.tag, false)?;
+            let mut tx = client.transaction()?;
+            let row = tx
+                .query_opt("SELECT id FROM payees WHERE name = $1", &[&args.name])?
+                .ok_or_else(|| format!("payee {} not found", args.name))?;
+            let payee_id: i64 = row.get(0);
+            if args.clear_tags || !args.tag.is_empty() {
+                tx.execute("DELETE FROM payee_tags WHERE payee_id = $1", &[&payee_id])?;
+                for tag_id in tag_ids.values() {
+                    tx.execute(
+                        "INSERT INTO payee_tags (payee_id, tag_id) VALUES ($1, $2)",
+                        &[&payee_id, tag_id],
+                    )?;
+                }
+            }
+            tx.commit()?;
+            println!("updated payee {}", args.name);
+        }
+        PayeesCommand::Remove(args) => {
+            let changed = client.execute("DELETE FROM payees WHERE name = $1", &[&args.name])?;
+            if changed == 0 {
+                return Err(format!("payee {} not found", args.name).into());
+            }
+            println!("removed payee {}", args.name);
+        }
+        PayeesCommand::Rename(args) => {
+            let changed = client.execute(
+                "UPDATE payees SET name = $1 WHERE name = $2",
+                &[&args.new, &args.old],
+            )?;
+            if changed == 0 {
+                return Err(format!("payee {} not found", args.old).into());
+            }
+            println!("renamed payee {} to {}", args.old, args.new);
         }
     }
     Ok(())
@@ -834,6 +1012,66 @@ fn missing_tags(client: &mut Client, tags: &[String]) -> Result<Vec<String>, Any
         }
     }
     Ok(missing)
+}
+
+fn default_payee_tag_ids(
+    client: &mut Client,
+    payee: &str,
+) -> Result<std::collections::HashMap<String, i64>, AnyError> {
+    let mut ids = std::collections::HashMap::new();
+    for row in client.query(
+        "SELECT t.name, t.id
+         FROM payees p
+         JOIN payee_tags pt ON pt.payee_id = p.id
+         JOIN tags t ON t.id = pt.tag_id
+         WHERE p.name = $1
+         ORDER BY t.name",
+        &[&payee],
+    )? {
+        ids.insert(row.get(0), row.get(1));
+    }
+    Ok(ids)
+}
+
+fn list_payees(client: &mut Client) -> Result<Vec<PayeeRule>, AnyError> {
+    client
+        .query(
+            "SELECT p.id, p.name,
+                COALESCE(array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL), ARRAY[]::text[]) AS tags
+             FROM payees p
+             LEFT JOIN payee_tags pt ON pt.payee_id = p.id
+             LEFT JOIN tags t ON t.id = pt.tag_id
+             GROUP BY p.id
+             ORDER BY p.name",
+            &[],
+        )?
+        .into_iter()
+        .map(payee_rule_from_row)
+        .collect()
+}
+
+fn get_payee_rule(client: &mut Client, name: &str) -> Result<Option<PayeeRule>, AnyError> {
+    client
+        .query_opt(
+            "SELECT p.id, p.name,
+                COALESCE(array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL), ARRAY[]::text[]) AS tags
+             FROM payees p
+             LEFT JOIN payee_tags pt ON pt.payee_id = p.id
+             LEFT JOIN tags t ON t.id = pt.tag_id
+             WHERE p.name = $1
+             GROUP BY p.id",
+            &[&name],
+        )?
+        .map(payee_rule_from_row)
+        .transpose()
+}
+
+fn payee_rule_from_row(row: Row) -> Result<PayeeRule, AnyError> {
+    Ok(PayeeRule {
+        id: row.get(0),
+        name: row.get(1),
+        tags: row.get(2),
+    })
 }
 
 fn spend_from_row(row: Row) -> Result<Spend, AnyError> {
