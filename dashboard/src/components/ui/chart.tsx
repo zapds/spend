@@ -123,6 +123,7 @@ function ChartTooltipContent({
   indicator = "dot",
   hideLabel = false,
   hideIndicator = false,
+  hideZeroValues = false,
   label,
   labelFormatter,
   labelClassName,
@@ -134,6 +135,7 @@ function ChartTooltipContent({
   React.ComponentProps<"div"> & {
     hideLabel?: boolean
     hideIndicator?: boolean
+    hideZeroValues?: boolean
     indicator?: "line" | "dot" | "dashed"
     nameKey?: string
     labelKey?: string
@@ -182,11 +184,15 @@ function ChartTooltipContent({
     labelKey,
   ])
 
-  if (!active || !payload?.length) {
+  const visiblePayload = payload?.filter(
+    (item) => item.type !== "none" && (!hideZeroValues || Number(item.value) !== 0)
+  )
+
+  if (!active || !visiblePayload?.length) {
     return null
   }
 
-  const nestLabel = payload.length === 1 && indicator !== "dot"
+  const nestLabel = visiblePayload.length === 1 && indicator !== "dot"
 
   return (
     <div
@@ -197,8 +203,7 @@ function ChartTooltipContent({
     >
       {!nestLabel ? tooltipLabel : null}
       <div className="grid gap-1.5">
-        {payload
-          .filter((item) => item.type !== "none")
+        {visiblePayload
           .map((item, index) => {
             const key = `${nameKey ?? item.name ?? item.dataKey ?? "value"}`
             const itemConfig = getPayloadConfigFromPayload(config, item, key)

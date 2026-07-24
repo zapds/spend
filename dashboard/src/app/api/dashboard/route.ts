@@ -59,7 +59,7 @@ export async function GET(request: Request) {
          WHERE ${whereSql}
          GROUP BY tag
          ORDER BY SUM(s.amount) DESC
-         LIMIT 12`,
+         LIMIT 5`,
         values
       ),
       query<{ payee: string; amount: string; count: number }>(
@@ -68,7 +68,7 @@ export async function GET(request: Request) {
          WHERE ${whereSql}
          GROUP BY s.payee
          ORDER BY SUM(s.amount) DESC
-         LIMIT 12`,
+         LIMIT 5`,
         values
       ),
       query<{ date: string; tag: string; amount: string }>(

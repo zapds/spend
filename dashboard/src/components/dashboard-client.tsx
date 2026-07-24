@@ -74,11 +74,11 @@ export function DashboardClient() {
       <section className="grid gap-4 xl:grid-cols-2">
         <ChartCard title="Spend by tag">
           {data?.tagBars.length ? (
-            <ChartContainer className="h-[300px] w-full" config={barConfig}>
+            <ChartContainer className="h-[240px] w-full" config={barConfig}>
               <BarChart accessibilityLayer data={data.tagBars} layout="vertical" margin={{ left: 8, right: 24 }}>
                 <CartesianGrid horizontal={false} strokeDasharray="3 3" />
                 <XAxis dataKey="amount" hide type="number" />
-                <YAxis dataKey="tag" type="category" width={90} tickLine={false} axisLine={false} />
+                <YAxis dataKey="tag" type="category" width={90} tickLine={false} axisLine={false} tick={{ fill: "var(--foreground)" }} />
                 <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatMoney(Number(value))} />} />
                 <Bar dataKey="amount" fill="var(--color-amount)" radius={8} />
               </BarChart>
@@ -87,11 +87,11 @@ export function DashboardClient() {
         </ChartCard>
         <ChartCard title="Spend by payee">
           {data?.payeeBars.length ? (
-            <ChartContainer className="h-[300px] w-full" config={barConfig}>
+            <ChartContainer className="h-[240px] w-full" config={barConfig}>
               <BarChart accessibilityLayer data={data.payeeBars} layout="vertical" margin={{ left: 8, right: 24 }}>
                 <CartesianGrid horizontal={false} strokeDasharray="3 3" />
                 <XAxis dataKey="amount" hide type="number" />
-                <YAxis dataKey="payee" type="category" width={100} tickLine={false} axisLine={false} />
+                <YAxis dataKey="payee" type="category" width={100} tickLine={false} axisLine={false} tick={{ fill: "var(--foreground)" }} />
                 <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatMoney(Number(value))} />} />
                 <Bar dataKey="amount" fill="var(--color-amount)" radius={8} />
               </BarChart>
@@ -106,7 +106,7 @@ export function DashboardClient() {
               <CartesianGrid vertical={false} strokeDasharray="3 3" />
               <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={30} />
               <YAxis tickLine={false} axisLine={false} width={70} tickFormatter={(value) => formatMoney(Number(value))} />
-              <ChartTooltip content={<ChartTooltipContent />} />
+              <ChartTooltip content={<ChartTooltipContent hideZeroValues />} />
               {data.trendKeys.map((key, index) => (
                 <Line key={key} dataKey={key} type="monotone" stroke={`var(--chart-${(index % 5) + 1})`} strokeWidth={2} dot={false} connectNulls />
               ))}
