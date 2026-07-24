@@ -85,7 +85,10 @@ export async function GET(request: Request) {
     const trendMap = new Map<string, Record<string, number | string>>()
     for (const day of eachDayOfInterval({ start: selected.start, end: selected.end })) {
       const key = formatISO(day, { representation: "date" })
-      trendMap.set(key, { date: key })
+      trendMap.set(key, {
+        date: key,
+        ...Object.fromEntries(topTags.map((tagName) => [tagName, 0])),
+      })
     }
     for (const row of trendRows.rows) {
       const tagName = topTags.includes(row.tag) ? row.tag : "Other"
