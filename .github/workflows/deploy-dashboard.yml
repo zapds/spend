@@ -1,0 +1,89 @@
+name: Deploy dashboard
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - dashboard/**
+      - ecosystem.config.cjs
+      - .github/workflows/deploy-dashboard.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spend-dashboard-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm exec tsc -- --noEmit
+
+      - name: Build
+        run: npm run build
+
+  deploy:
+    name: Deploy
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/spend_deploy
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/spend_deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy dashboard
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/spend_deploy -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
+            source "$HOME/.nvm/nvm.sh"
+            git -C "$HOME/spend" pull --ff-only origin main
+            npm --prefix "$HOME/spend/dashboard" ci
+            npm --prefix "$HOME/spend/dashboard" run build
+            pm2 restart spend-dashboard
+
+            for attempt in {1..15}; do
+              if curl --fail --silent --show-error http://127.0.0.1:3333/api/status > /dev/null; then
+                exit 0
+              fi
+              sleep 2
+            done
+
+            curl --fail --silent --show-error http://127.0.0.1:3333/api/status > /dev/null
+          REMOTE
