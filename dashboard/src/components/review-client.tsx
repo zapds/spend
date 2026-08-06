@@ -1,8 +1,10 @@
 "use client"
 
 import * as React from "react"
+import { Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
+import { DeleteSpendDialog } from "@/components/delete-spend-dialog"
 import { PayeeRuleDialog } from "@/components/payee-rule-dialog"
 import { TagSelect } from "@/components/tag-select"
 import { Badge } from "@/components/ui/badge"
@@ -78,6 +80,7 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
   const [tag, setTag] = React.useState(spend.tag ?? "")
   const [note, setNote] = React.useState(spend.note ?? "")
   const [saving, setSaving] = React.useState(false)
+  const [confirmDelete, setConfirmDelete] = React.useState(false)
 
   async function save(clearTag = false) {
     setSaving(true)
@@ -116,13 +119,17 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
             </div>
           </div>
         </div>
-        <Button size="sm" variant="secondary" onClick={() => onCreatePayee(spend.payee)}>Payee default</Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="secondary" onClick={() => onCreatePayee(spend.payee)}>Payee default</Button>
+          <Button size="sm" variant="destructive" onClick={() => setConfirmDelete(true)}><Trash2 />Delete</Button>
+        </div>
       </div>
       <div className="mt-3 grid gap-2 md:grid-cols-[220px_1fr_auto]">
         <TagSelect value={tag || undefined} onValueChange={setTag} />
         <Input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add note" />
         <div className="flex gap-2"><Button size="sm" variant="outline" disabled={saving} onClick={() => save(true)}>Clear</Button><Button size="sm" disabled={saving} onClick={() => save(false)}>Save</Button></div>
       </div>
+      {confirmDelete ? <DeleteSpendDialog spend={spend} onClose={() => setConfirmDelete(false)} onDeleted={() => { setConfirmDelete(false); onChanged() }} /> : null}
     </div>
   )
 }

@@ -38,3 +38,17 @@ export async function PATCH(request: Request, ctx: RouteContext<"/api/transactio
     return dbErrorResponse(error)
   }
 }
+
+export async function DELETE(_request: Request, ctx: RouteContext<"/api/transactions/[id]">) {
+  const { id: rawId } = await ctx.params
+  const id = parseId(rawId)
+  if (!id) return Response.json({ error: "Invalid id" }, { status: 400 })
+
+  try {
+    const result = await query("DELETE FROM spends WHERE id = $1", [id])
+    if (result.rowCount === 0) return Response.json({ error: "Spend not found" }, { status: 404 })
+    return Response.json({ ok: true })
+  } catch (error) {
+    return dbErrorResponse(error)
+  }
+}
