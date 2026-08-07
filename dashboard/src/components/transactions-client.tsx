@@ -2,10 +2,11 @@
 
 import * as React from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { MoreHorizontal, Trash2 } from "lucide-react"
+import { MoreHorizontal, Pencil, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { DeleteSpendDialog } from "@/components/delete-spend-dialog"
+import { EditSpendAmountDialog } from "@/components/edit-spend-amount-dialog"
 import { TagSelect, useTags } from "@/components/tag-select"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -29,6 +30,7 @@ export function TransactionsClient() {
   const [data, setData] = React.useState<TransactionsData>({ rows: [], total: 0 })
   const [loading, setLoading] = React.useState(true)
   const [editing, setEditing] = React.useState<TransactionRow | null>(null)
+  const [editingAmount, setEditingAmount] = React.useState<TransactionRow | null>(null)
   const [deleting, setDeleting] = React.useState<TransactionRow | null>(null)
   const limit = Number(searchParams.get("limit") ?? 25)
   const offset = Number(searchParams.get("offset") ?? 0)
@@ -126,6 +128,7 @@ export function TransactionsClient() {
                         <DropdownMenuTrigger asChild><Button size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => setEditing(row)}>Edit note/tag</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setEditingAmount(row)}><Pencil />Edit amount</DropdownMenuItem>
                           <DropdownMenuItem variant="destructive" onClick={() => setDeleting(row)}><Trash2 />Delete</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -146,6 +149,7 @@ export function TransactionsClient() {
         </CardContent>
       </Card>
       {editing ? <EditTransactionDialog row={editing} onClose={() => setEditing(null)} onSaved={load} /> : null}
+      {editingAmount ? <EditSpendAmountDialog spend={editingAmount} onClose={() => setEditingAmount(null)} /> : null}
       {deleting ? <DeleteSpendDialog spend={deleting} onClose={() => setDeleting(null)} onDeleted={() => setDeleting(null)} /> : null}
     </div>
   )

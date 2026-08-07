@@ -9,6 +9,7 @@ export const authSchema = z.object({ password: z.string() })
 
 export const transactionPatchSchema = z
   .object({
+    amount: moneyString.optional(),
     note: z.string().nullable().optional(),
     tag: z.string().trim().min(1).optional(),
     clearTag: z.boolean().optional(),

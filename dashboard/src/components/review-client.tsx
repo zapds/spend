@@ -1,10 +1,11 @@
 "use client"
 
 import * as React from "react"
-import { Trash2 } from "lucide-react"
+import { Pencil, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { DeleteSpendDialog } from "@/components/delete-spend-dialog"
+import { EditSpendAmountDialog } from "@/components/edit-spend-amount-dialog"
 import { PayeeRuleDialog } from "@/components/payee-rule-dialog"
 import { TagSelect } from "@/components/tag-select"
 import { Badge } from "@/components/ui/badge"
@@ -80,6 +81,7 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
   const [tag, setTag] = React.useState(spend.tag ?? "")
   const [note, setNote] = React.useState(spend.note ?? "")
   const [saving, setSaving] = React.useState(false)
+  const [editingAmount, setEditingAmount] = React.useState(false)
   const [confirmDelete, setConfirmDelete] = React.useState(false)
 
   async function save(clearTag = false) {
@@ -119,8 +121,9 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
             </div>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <Button size="sm" variant="secondary" onClick={() => onCreatePayee(spend.payee)}>Payee default</Button>
+          <Button size="sm" variant="outline" onClick={() => setEditingAmount(true)}><Pencil />Edit amount</Button>
           <Button size="sm" variant="destructive" onClick={() => setConfirmDelete(true)}><Trash2 />Delete</Button>
         </div>
       </div>
@@ -129,6 +132,7 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
         <Input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add note" />
         <div className="flex gap-2"><Button size="sm" variant="outline" disabled={saving} onClick={() => save(true)}>Clear</Button><Button size="sm" disabled={saving} onClick={() => save(false)}>Save</Button></div>
       </div>
+      {editingAmount ? <EditSpendAmountDialog spend={spend} onClose={() => setEditingAmount(false)} /> : null}
       {confirmDelete ? <DeleteSpendDialog spend={spend} onClose={() => setConfirmDelete(false)} onDeleted={() => { setConfirmDelete(false); onChanged() }} /> : null}
     </div>
   )
