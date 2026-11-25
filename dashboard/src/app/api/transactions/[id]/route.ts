@@ -13,9 +13,13 @@ export async function PATCH(request: Request, ctx: RouteContext<"/api/transactio
     const updates: string[] = []
     const values: unknown[] = []
 
-    if (parsed.data.amount) {
+    if (parsed.data.amount !== undefined) {
       values.push(parsed.data.amount)
-      updates.push(`amount = $${values.length}`)
+      updates.push(`amount = $${values.length}::numeric`)
+    }
+    if (parsed.data.type) {
+      values.push(parsed.data.type)
+      updates.push(`type = $${values.length}`)
     }
     if ("note" in parsed.data) {
       values.push(parsed.data.note)

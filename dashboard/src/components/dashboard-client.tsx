@@ -9,10 +9,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatMoney } from "@/lib/format"
-import type { MetricCardData } from "@/lib/types"
+import type { MetricCardData, RangeSummaryData } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 type DashboardData = {
   kpis: { today: MetricCardData; week: MetricCardData; month: MetricCardData }
+  rangeSummary: RangeSummaryData
   tagBars: Array<{ tag: string; amount: number; count: number }>
   payeeBars: Array<{ payee: string; amount: number; count: number }>
   tagTrend: Array<Record<string, string | number>>
@@ -64,12 +66,46 @@ export function DashboardClient() {
     trend5: { label: "Trend", color: "var(--chart-5)" },
   } satisfies ChartConfig
 
+  const summary = data?.rangeSummary
+  const net = summary?.net ?? 0
+
   return (
     <div className="space-y-5">
       <section className="grid gap-4 md:grid-cols-3">
         <MetricCard title="Today" metric={data?.kpis.today} />
         <MetricCard title="This week" metric={data?.kpis.week} />
         <MetricCard title="This month" metric={data?.kpis.month} />
+      </section>
+      <section className="grid gap-4 md:grid-cols-3">
+        <Card className="border-0 bg-card/60 ring-0">
+          <CardHeader className="pb-1">
+            <CardTitle className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Range spent</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="font-mono text-2xl font-semibold tracking-tight">{formatMoney(summary?.debits ?? 0)}</div>
+            <p className="mt-1 text-xs text-muted-foreground">{summary?.debitCount ?? 0} debits</p>
+          </CardContent>
+        </Card>
+        <Card className="border-0 bg-card/60 ring-0">
+          <CardHeader className="pb-1">
+            <CardTitle className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Range credited</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="font-mono text-2xl font-semibold tracking-tight text-emerald-400">+{formatMoney(summary?.credits ?? 0)}</div>
+            <p className="mt-1 text-xs text-muted-foreground">{summary?.creditCount ?? 0} unmerged credits</p>
+          </CardContent>
+        </Card>
+        <Card className="border-0 bg-card/60 ring-0">
+          <CardHeader className="pb-1">
+            <CardTitle className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Range net flow</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className={cn("font-mono text-2xl font-semibold tracking-tight", net >= 0 ? "text-emerald-400" : "text-foreground")}>
+              {net >= 0 ? `+${formatMoney(net)}` : `-${formatMoney(Math.abs(net))}`}
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">credits minus debits</p>
+          </CardContent>
+        </Card>
       </section>
       <section className="grid gap-4 xl:grid-cols-2">
         <ChartCard title="Spend by tag">

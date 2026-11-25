@@ -8,7 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import type { TransactionType } from "@/lib/types"
 
 export function AddSpendDialog({
   open,
@@ -23,6 +25,7 @@ export function AddSpendDialog({
   defaultPayee?: string
   defaultTag?: string
 }) {
+  const [type, setType] = React.useState<TransactionType>("debit")
   const [amount, setAmount] = React.useState("")
   const [payee, setPayee] = React.useState(defaultPayee)
   const [tag, setTag] = React.useState(defaultTag ?? "")
@@ -47,15 +50,16 @@ export function AddSpendDialog({
     const response = await fetch("/api/transactions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount, payee, tag: tag || undefined, note, timestamp: isoTimestamp }),
+      body: JSON.stringify({ type, amount, payee, tag: tag || undefined, note, timestamp: isoTimestamp }),
     })
     setSubmitting(false)
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))
-      toast.error(data.error ?? "Could not add spend")
+      toast.error(data.error ?? "Could not add transaction")
       return
     }
-    toast.success("Spend added")
+    toast.success(type === "credit" ? "Credit added" : "Spend added")
+    setType("debit")
     setAmount("")
     setPayee("")
     setTag("")
@@ -69,17 +73,27 @@ export function AddSpendDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="border-0 bg-card sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Add spend</DialogTitle>
+          <DialogTitle>Add transaction</DialogTitle>
         </DialogHeader>
         <form className="space-y-4" onSubmit={onSubmit}>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-2">
+              <Label>Type</Label>
+              <Select value={type} onValueChange={(value) => setType(value as TransactionType)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="debit">Debit (spent)</SelectItem>
+                  <SelectItem value="credit">Credit (received)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="amount">Amount</Label>
               <Input id="amount" inputMode="decimal" placeholder="250.00" value={amount} onChange={(event) => setAmount(event.target.value)} required />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="payee">Payee</Label>
-              <Input id="payee" placeholder="Uber" value={payee} onChange={(event) => setPayee(event.target.value)} required />
+              <Label htmlFor="payee">{type === "credit" ? "From" : "Payee"}</Label>
+              <Input id="payee" placeholder={type === "credit" ? "AZIZ PRAVIN" : "Uber"} value={payee} onChange={(event) => setPayee(event.target.value)} required />
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -98,7 +112,9 @@ export function AddSpendDialog({
           </div>
           <DialogFooter>
             <Button variant="secondary" type="button" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button disabled={submitting || !amount || !payee} type="submit">{submitting ? "Adding..." : "Add spend"}</Button>
+            <Button disabled={submitting || !amount || !payee} type="submit">
+              {submitting ? "Adding..." : type === "credit" ? "Add credit" : "Add spend"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

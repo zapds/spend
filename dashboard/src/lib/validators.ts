@@ -3,13 +3,17 @@ import { z } from "zod"
 const moneyString = z
   .string()
   .trim()
-  .regex(/^\d+(\.\d{1,2})?$/, "Use a positive amount with up to two decimals")
+  .transform((value) => value.replace(/,/g, ""))
+  .refine((value) => /^\d+(\.\d{1,2})?$/.test(value), "Use a non-negative amount with up to two decimals")
+
+export const transactionTypeSchema = z.enum(["debit", "credit"])
 
 export const authSchema = z.object({ password: z.string() })
 
 export const transactionPatchSchema = z
   .object({
     amount: moneyString.optional(),
+    type: transactionTypeSchema.optional(),
     note: z.string().nullable().optional(),
     tag: z.string().trim().min(1).optional(),
     clearTag: z.boolean().optional(),
@@ -19,9 +23,21 @@ export const transactionPatchSchema = z
 export const spendCreateSchema = z.object({
   amount: moneyString,
   payee: z.string().trim().min(1),
+  type: transactionTypeSchema.default("debit"),
   tag: z.string().trim().min(1).optional(),
   timestamp: z.string().datetime({ offset: true }).optional(),
   note: z.string().trim().optional(),
+  externalRef: z.string().trim().min(1).optional(),
+  allowDuplicate: z.boolean().optional(),
+})
+
+export const mergeCreditSchema = z.object({
+  creditId: z.number().int().positive(),
+  debitId: z.number().int().positive(),
+})
+
+export const unmergeCreditSchema = z.object({
+  creditId: z.number().int().positive(),
 })
 
 export const payeeCreateSchema = z.object({

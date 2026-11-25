@@ -7,11 +7,15 @@ async function metric(start: Date, end: Date, label: string) {
   const previous = comparablePreviousRange(start, end)
   const [currentResult, previousResult] = await Promise.all([
     query<{ amount: string; count: number }>(
-      "SELECT COALESCE(SUM(amount), 0)::text AS amount, COUNT(*)::int AS count FROM spends WHERE timestamp >= $1 AND timestamp < $2",
+      `SELECT COALESCE(SUM(amount), 0)::text AS amount, COUNT(*)::int AS count
+       FROM spends
+       WHERE type = 'debit' AND merged_into_id IS NULL AND timestamp >= $1 AND timestamp < $2`,
       [start, end]
     ),
     query<{ amount: string }>(
-      "SELECT COALESCE(SUM(amount), 0)::text AS amount FROM spends WHERE timestamp >= $1 AND timestamp < $2",
+      `SELECT COALESCE(SUM(amount), 0)::text AS amount
+       FROM spends
+       WHERE type = 'debit' AND merged_into_id IS NULL AND timestamp >= $1 AND timestamp < $2`,
       [previous.start, previous.end]
     ),
   ])
@@ -37,26 +41,34 @@ export async function GET(request: Request) {
     const tag = url.searchParams.get("tag")
     const payee = url.searchParams.get("payee")
 
-    const where = ["s.timestamp >= $1", "s.timestamp < $2"]
+    const baseWhere = ["s.merged_into_id IS NULL", "s.timestamp >= $1", "s.timestamp < $2"]
     const values: unknown[] = [selected.start, selected.end]
     if (tag) {
       values.push(tag)
-      where.push(`t.name = $${values.length}`)
+      baseWhere.push(`t.name = $${values.length}`)
     }
     if (payee) {
       values.push(`%${payee}%`)
-      where.push(`s.payee ILIKE $${values.length}`)
+      baseWhere.push(`s.payee ILIKE $${values.length}`)
     }
-    const whereSql = where.join(" AND ")
+    const baseWhereSql = baseWhere.join(" AND ")
+    const debitWhereSql = `${baseWhereSql} AND s.type = 'debit'`
 
-    const [today, week, month, tagBars, payeeBars, trendRows] = await Promise.all([
+    const [today, week, month, rangeFlow, tagBars, payeeBars, trendRows] = await Promise.all([
       metric(todayStart, now, "vs previous elapsed day"),
       metric(weekStart, now, "vs previous elapsed week"),
       metric(monthStart, now, "vs previous elapsed month"),
+      query<{ type: string; amount: string; count: number }>(
+        `SELECT s.type, COALESCE(SUM(s.amount), 0)::text AS amount, COUNT(*)::int AS count
+         FROM spends s LEFT JOIN tags t ON t.id = s.tag_id
+         WHERE ${baseWhereSql}
+         GROUP BY s.type`,
+        values
+      ),
       query<{ tag: string; amount: string; count: number }>(
         `SELECT COALESCE(t.name, 'Untagged') AS tag, SUM(s.amount)::text AS amount, COUNT(*)::int AS count
          FROM spends s LEFT JOIN tags t ON t.id = s.tag_id
-         WHERE ${whereSql}
+         WHERE ${debitWhereSql}
          GROUP BY tag
          ORDER BY SUM(s.amount) DESC
          LIMIT 5`,
@@ -65,7 +77,7 @@ export async function GET(request: Request) {
       query<{ payee: string; amount: string; count: number }>(
         `SELECT s.payee, SUM(s.amount)::text AS amount, COUNT(*)::int AS count
          FROM spends s LEFT JOIN tags t ON t.id = s.tag_id
-         WHERE ${whereSql}
+         WHERE ${debitWhereSql}
          GROUP BY s.payee
          ORDER BY SUM(s.amount) DESC
          LIMIT 5`,
@@ -74,12 +86,26 @@ export async function GET(request: Request) {
       query<{ date: string; tag: string; amount: string }>(
         `SELECT date_trunc('day', s.timestamp)::date::text AS date, COALESCE(t.name, 'Untagged') AS tag, SUM(s.amount)::text AS amount
          FROM spends s LEFT JOIN tags t ON t.id = s.tag_id
-         WHERE ${whereSql}
+         WHERE ${debitWhereSql}
          GROUP BY date, tag
          ORDER BY date ASC`,
         values
       ),
     ])
+
+    let debits = 0
+    let debitCount = 0
+    let credits = 0
+    let creditCount = 0
+    for (const row of rangeFlow.rows) {
+      if (row.type === "credit") {
+        credits = toNumber(row.amount)
+        creditCount = row.count
+      } else {
+        debits = toNumber(row.amount)
+        debitCount = row.count
+      }
+    }
 
     const topTags = tagBars.rows.slice(0, 5).map((row) => row.tag)
     const trendMap = new Map<string, Record<string, number | string>>()
@@ -99,6 +125,13 @@ export async function GET(request: Request) {
 
     return Response.json({
       kpis: { today, week, month },
+      rangeSummary: {
+        debits,
+        debitCount,
+        credits,
+        creditCount,
+        net: credits - debits,
+      },
       tagBars: tagBars.rows.map((row) => ({ ...row, amount: toNumber(row.amount) })),
       payeeBars: payeeBars.rows.map((row) => ({ ...row, amount: toNumber(row.amount) })),
       tagTrend: Array.from(trendMap.values()),

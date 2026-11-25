@@ -10,7 +10,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use postgres::types::ToSql;
 use postgres::{Client, NoTls, Row};
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 type AnyError = Box<dyn Error>;
 
@@ -20,10 +20,10 @@ const HELP_TEMPLATE: &str =
 #[derive(Parser)]
 #[command(
     version,
-    about = "Agent-friendly CLI for recording and querying spending in PostgreSQL.",
-    long_about = "spend is designed for programmatic use by agents. Commands use explicit flags, a single optional --tag per spend, and consistent output switches. Database connection settings are read from ~/.config/spend/config.json.",
+    about = "Agent-friendly CLI for recording and querying spending and credits in PostgreSQL.",
+    long_about = "spend is designed for programmatic use by agents. Commands use explicit flags, a single optional --tag per transaction, debit/credit types, credit-into-debit merging, automatic duplicate prevention, and consistent output switches. Database connection settings are read from ~/.config/spend/config.json.",
     help_template = HELP_TEMPLATE,
-    after_help = "CONFIG:\n    ~/.config/spend/config.json must contain { \"database_url\": \"postgres://...\" }.\n\nSCHEMA:\n    spend fails if the required PostgreSQL schema is missing. Spends have optional tag_id; known payees have required tag_id.\n\nPAYEE DEFAULTS:\n    spend add uses a known payee's default tag only when no explicit --tag is passed. Untagged spends are allowed.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend payees add --name Uber --tag transport\n    spend list --tag food --date-start 2026-06-01 --date-end 2026-06-30 --json\n    spend summary --group-by month\n    spend validate-tags --tag food --tag unknown"
+    after_help = "CONFIG:\n    ~/.config/spend/config.json must contain { \"database_url\": \"postgres://...\" }.\n\nSCHEMA:\n    spend fails if the required PostgreSQL schema is missing. Transactions have type ('debit' or 'credit'), optional tag_id, external_ref, dedupe_key, and merged_into_id.\n\nPAYEE DEFAULTS:\n    spend add uses a known payee's default tag only when no explicit --tag is passed. Untagged transactions are allowed.\n\nDEDUPLICATION:\n    spend add and spend import automatically skip duplicates matching --ref or (type, UTC minute, amount, payee). Pass --allow-duplicate to override on manual adds.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend add --type credit --amount 60 --payee 'AZIZ PRAVIN' --ref 632950396958\n    spend merge --credit 45 --into 42\n    spend unmerge --credit 45\n    spend list --type credit --json\n    spend import --file ~/life/pending_spends.jsonl"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -32,35 +32,47 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Add one spend. Explicit tag overrides known payee default tag for this spend only.
+    /// Add one transaction (debit or credit). Skips duplicates unless --allow-duplicate is passed.
     #[command(
-        after_help = "PAYEE DEFAULTS:\n    If --tag is omitted and --payee exactly matches a known payee, that payee's default tag is attached. If --tag is omitted and no default exists, the spend is untagged.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend add --amount 430.50 --payee Domino's --tag food --note 'late dinner'\n    spend add --amount 1200 --payee Amazon --timestamp 2026-06-24T20:15:00+05:30"
+        after_help = "PAYEE DEFAULTS:\n    If --tag is omitted and --payee exactly matches a known payee, that payee's default tag is attached. If --tag is omitted and no default exists, the transaction is untagged.\n\nEXAMPLES:\n    spend add --amount 250 --payee Uber --tag transport\n    spend add --type credit --amount 60.00 --payee 'AZIZ PRAVIN' --ref 632950396958\n    spend add --amount 1200 --payee Amazon --timestamp 2026-06-24T20:15:00+05:30"
     )]
     Add(AddArgs),
 
-    /// Retrieve one spend by id.
+    /// Retrieve one transaction by id.
     #[command(after_help = "EXAMPLES:\n    spend get --id 42\n    spend get --id 42 --json")]
     Get(GetArgs),
 
-    /// Remove one spend by id. No confirmation is prompted.
+    /// Remove one transaction by id. No confirmation is prompted.
     #[command(after_help = "EXAMPLE:\n    spend remove --id 42")]
     Remove(IdArgs),
 
-    /// Update fields on one spend. Use --clear-tag to make it untagged.
+    /// Update fields on one transaction. Use --clear-tag to make it untagged.
     #[command(
-        after_help = "EXAMPLES:\n    spend update --id 42 --payee 'Uber Auto'\n    spend update --id 42 --tag transport\n    spend update --id 42 --clear-tag\n    spend update --id 42 --note 'client visit'"
+        after_help = "EXAMPLES:\n    spend update --id 42 --payee 'Uber Auto'\n    spend update --id 42 --tag transport\n    spend update --id 42 --clear-tag\n    spend update --id 42 --type credit"
     )]
     Update(UpdateArgs),
 
-    /// List spends. All filters compose and use the same names as summary/export.
+    /// Merge a credit transaction into a debit transaction, reducing the debit amount and hiding the credit.
     #[command(
-        after_help = "FILTER BEHAVIOR:\n    --tag filters by the spend's single tag. Date-only values such as 2026-06-01 are accepted for --date-start and --date-end.\n\nEXAMPLES:\n    spend list --tag food\n    spend list --payee Uber\n    spend list --date-start 2026-06-01 --date-end 2026-06-30\n    spend list --amount-min 500 --sort amount --desc --csv"
+        after_help = "BEHAVIOR:\n    Reduces the target debit's amount by the credit's amount, appends a merge note to the debit, and marks the credit as merged (preserving duplicate protection).\n\nEXAMPLE:\n    spend merge --credit 45 --into 42"
+    )]
+    Merge(MergeArgs),
+
+    /// Undo a previous credit-into-debit merge.
+    #[command(
+        after_help = "BEHAVIOR:\n    Restores the debit's amount by adding the credit's amount back and unmarks the credit.\n\nEXAMPLE:\n    spend unmerge --credit 45"
+    )]
+    Unmerge(UnmergeArgs),
+
+    /// List transactions. All filters compose and use the same names as summary/export.
+    #[command(
+        after_help = "FILTER BEHAVIOR:\n    Merged credits are hidden by default (pass --include-merged to show them). --tag filters by the transaction's single tag. Date-only values such as 2026-06-01 are accepted for --date-start and --date-end.\n\nEXAMPLES:\n    spend list --tag food\n    spend list --type credit\n    spend list --payee Uber\n    spend list --date-start 2026-06-01 --date-end 2026-06-30\n    spend list --amount-min 500 --sort amount --desc --csv"
     )]
     List(ListArgs),
 
-    /// Aggregate spends. Uses the same filters as list/export.
+    /// Aggregate transactions. Defaults to debits unless --type is specified.
     #[command(
-        after_help = "EXAMPLES:\n    spend summary --group-by month\n    spend summary --group-by tag --date-start 2026-01-01\n    spend summary --group-by payee --amount-min 100"
+        after_help = "EXAMPLES:\n    spend summary --group-by month\n    spend summary --type credit --group-by payee\n    spend summary --group-by tag --date-start 2026-01-01"
     )]
     Summary(SummaryArgs),
 
@@ -75,15 +87,15 @@ enum Command {
     )]
     Payees(PayeesCommand),
 
-    /// Export spends as CSV or JSON. Uses the same filters as list/summary.
+    /// Export transactions as CSV or JSON. Uses the same filters as list/summary.
     #[command(
         after_help = "EXAMPLES:\n    spend export --format csv --tag food\n    spend export --format json --date-start 2026-01-01"
     )]
     Export(ExportArgs),
 
-    /// Import spends from CSV or JSON. Missing tags are created automatically.
+    /// Import transactions from CSV, JSON, or JSONL. Missing tags are created automatically; duplicates are skipped.
     #[command(
-        after_help = "INPUT FORMAT:\n    JSON must be an array of objects with amount, payee, optional timestamp, note, and tag. Legacy tags is accepted only if empty or one item.\n    CSV must include amount and payee columns. Optional columns: timestamp,note,tag. Legacy tags is accepted only if empty or one tag.\n\nEXAMPLES:\n    spend import --file spends.json\n    spend import --file spends.csv --format csv"
+        after_help = "INPUT FORMAT:\n    JSONL: one JSON object per line with amount, payee, optional type (debit|credit), timestamp, note, tag, ref.\n    JSON: array of objects with the same fields. Legacy tags is accepted only if empty or one item.\n    CSV: must include amount and payee columns. Optional columns: type,timestamp,note,tag,ref.\n\nEXAMPLES:\n    spend import --file ~/life/pending_spends.jsonl\n    spend import --file spends.json\n    spend import --file spends.csv --format csv"
     )]
     Import(ImportArgs),
 
@@ -123,14 +135,40 @@ enum PayeesCommand {
     Rename(PayeeRenameArgs),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum SpendType {
+    Debit,
+    Credit,
+}
+
+impl SpendType {
+    fn as_str(self) -> &'static str {
+        match self {
+            SpendType::Debit => "debit",
+            SpendType::Credit => "credit",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, AnyError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "debit" => Ok(SpendType::Debit),
+            "credit" => Ok(SpendType::Credit),
+            other => Err(format!("invalid transaction type: {other} (expected debit or credit)").into()),
+        }
+    }
+}
+
 #[derive(Args)]
 struct AddArgs {
-    /// Decimal amount with up to two places, for example 250 or 250.75.
+    /// Decimal amount with up to two places, for example 250 or 1,250.75.
     #[arg(long)]
-    amount: Decimal,
-    /// Payee or merchant name.
+    amount: String,
+    /// Payee or sender name.
     #[arg(long)]
     payee: String,
+    /// Transaction type: debit (money out) or credit (money in).
+    #[arg(long = "type", value_enum, default_value_t = SpendType::Debit)]
+    tx_type: SpendType,
     /// Existing tag to attach. If omitted, a known payee default is used when available.
     #[arg(long)]
     tag: Option<String>,
@@ -140,6 +178,12 @@ struct AddArgs {
     /// Optional free-form note.
     #[arg(long)]
     note: Option<String>,
+    /// Optional external reference (e.g. UPI reference number) used for deduplication.
+    #[arg(long = "ref")]
+    external_ref: Option<String>,
+    /// Bypass duplicate detection and insert even if an identical transaction exists.
+    #[arg(long)]
+    allow_duplicate: bool,
 }
 
 #[derive(Args)]
@@ -160,16 +204,36 @@ struct IdArgs {
 }
 
 #[derive(Args)]
+struct MergeArgs {
+    /// Credit transaction id to merge.
+    #[arg(long)]
+    credit: i64,
+    /// Debit transaction id to reduce.
+    #[arg(long)]
+    into: i64,
+}
+
+#[derive(Args)]
+struct UnmergeArgs {
+    /// Previously merged credit transaction id to restore.
+    #[arg(long)]
+    credit: i64,
+}
+
+#[derive(Args)]
 struct UpdateArgs {
     /// Spend id.
     #[arg(long)]
     id: i64,
     /// Replace the amount. Must have up to two decimal places.
     #[arg(long)]
-    amount: Option<Decimal>,
+    amount: Option<String>,
     /// Replace the payee. This does not automatically apply a known payee default tag.
     #[arg(long)]
     payee: Option<String>,
+    /// Replace the transaction type (debit or credit).
+    #[arg(long = "type", value_enum)]
+    tx_type: Option<SpendType>,
     /// Replace the timestamp. Must be ISO 8601 with timezone.
     #[arg(long)]
     timestamp: Option<String>,
@@ -186,22 +250,28 @@ struct UpdateArgs {
 
 #[derive(Args, Clone, Default)]
 struct FilterArgs {
-    /// Match spends with this single tag.
+    /// Filter by transaction type (debit or credit).
+    #[arg(long = "type", value_enum)]
+    tx_type: Option<SpendType>,
+    /// Include credits that have already been merged into a debit.
+    #[arg(long)]
+    include_merged: bool,
+    /// Match transactions with this single tag.
     #[arg(long)]
     tag: Option<String>,
     /// Match exact payee text.
     #[arg(long)]
     payee: Option<String>,
-    /// Include spends on/after this date or timestamp. Date example: 2026-06-01.
+    /// Include transactions on/after this date or timestamp. Date example: 2026-06-01.
     #[arg(long)]
     date_start: Option<String>,
-    /// Include spends on/before this date or timestamp. Date-only end is inclusive for the whole day.
+    /// Include transactions on/before this date or timestamp. Date-only end is inclusive for the whole day.
     #[arg(long)]
     date_end: Option<String>,
-    /// Include spends with amount greater than or equal to this value.
+    /// Include transactions with amount greater than or equal to this value.
     #[arg(long)]
     amount_min: Option<Decimal>,
-    /// Include spends with amount less than or equal to this value.
+    /// Include transactions with amount less than or equal to this value.
     #[arg(long)]
     amount_max: Option<Decimal>,
 }
@@ -253,7 +323,7 @@ struct ExportArgs {
 
 #[derive(Args)]
 struct ImportArgs {
-    /// CSV or JSON file to import.
+    /// CSV, JSON, or JSONL file to import.
     #[arg(long)]
     file: PathBuf,
     /// Input format. If omitted, inferred from file extension.
@@ -370,6 +440,7 @@ enum GroupBy {
 enum DataFormat {
     Csv,
     Json,
+    Jsonl,
 }
 
 #[derive(Deserialize)]
@@ -380,33 +451,59 @@ struct Config {
 #[derive(Serialize)]
 struct Spend {
     id: i64,
+    #[serde(rename = "type")]
+    tx_type: String,
     timestamp: DateTime<Utc>,
     #[serde(with = "rust_decimal::serde::str")]
     amount: Decimal,
     payee: String,
     note: Option<String>,
     tag: Option<String>,
+    external_ref: Option<String>,
+    merged_into_id: Option<i64>,
+}
+
+fn deserialize_amount<'de, D>(deserializer: D) -> Result<Decimal, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let raw = match value {
+        serde_json::Value::Number(num) => num.to_string(),
+        serde_json::Value::String(s) => s,
+        _ => return Err(serde::de::Error::custom("amount must be a number or string")),
+    };
+    parse_amount(&raw).map_err(serde::de::Error::custom)
 }
 
 #[derive(Deserialize)]
 struct ImportSpend {
+    #[serde(deserialize_with = "deserialize_amount")]
     amount: Decimal,
     payee: String,
+    #[serde(rename = "type")]
+    tx_type: Option<String>,
     timestamp: Option<String>,
     note: Option<String>,
     tag: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(alias = "ref")]
+    external_ref: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct CsvImportSpend {
-    amount: Decimal,
+    amount: String,
     payee: String,
+    #[serde(rename = "type")]
+    tx_type: Option<String>,
     timestamp: Option<String>,
     note: Option<String>,
     tag: Option<String>,
     tags: Option<String>,
+    #[serde(alias = "ref")]
+    external_ref: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -442,6 +539,8 @@ fn run() -> Result<(), AnyError> {
         Command::Get(args) => get_spend_cmd(&mut client, args)?,
         Command::Remove(args) => remove_spend(&mut client, args.id)?,
         Command::Update(args) => update_spend(&mut client, args)?,
+        Command::Merge(args) => merge_credit(&mut client, args)?,
+        Command::Unmerge(args) => unmerge_credit(&mut client, args)?,
         Command::List(args) => list_spends_cmd(&mut client, args)?,
         Command::Summary(args) => summary_cmd(&mut client, args)?,
         Command::Tags(command) => tags_cmd(&mut client, command)?,
@@ -479,6 +578,10 @@ fn validate_schema(client: &mut Client) -> Result<(), AnyError> {
         ("spends", "payee"),
         ("spends", "note"),
         ("spends", "tag_id"),
+        ("spends", "type"),
+        ("spends", "external_ref"),
+        ("spends", "dedupe_key"),
+        ("spends", "merged_into_id"),
         ("payees", "id"),
         ("payees", "name"),
         ("payees", "tag_id"),
@@ -495,34 +598,116 @@ fn validate_schema(client: &mut Client) -> Result<(), AnyError> {
             )?
             .get(0);
         if !exists {
-            return Err(format!("missing required schema column public.{table}.{column}").into());
+            return Err(format!(
+                "missing required schema column public.{table}.{column} (run latest migration in cli/migrations/)"
+            )
+            .into());
         }
     }
 
     Ok(())
 }
 
+fn compute_dedupe_key(
+    tx_type: SpendType,
+    timestamp: DateTime<Utc>,
+    amount: Decimal,
+    payee: &str,
+) -> String {
+    let minute = timestamp.format("%Y-%m-%dT%H:%MZ");
+    let norm_payee = payee.trim().to_lowercase();
+    format!(
+        "{}|{}|{}|{}",
+        tx_type.as_str(),
+        minute,
+        format_amount(amount),
+        norm_payee
+    )
+}
+
+fn find_duplicate(
+    client: &mut Client,
+    external_ref: Option<&str>,
+    dedupe_key: &str,
+) -> Result<Option<i64>, AnyError> {
+    if let Some(ext_ref) = external_ref {
+        if let Some(row) = client.query_opt(
+            "SELECT id FROM spends WHERE external_ref = $1 LIMIT 1",
+            &[&ext_ref],
+        )? {
+            return Ok(Some(row.get(0)));
+        }
+    }
+    if let Some(row) = client.query_opt(
+        "SELECT id FROM spends WHERE dedupe_key = $1 LIMIT 1",
+        &[&dedupe_key],
+    )? {
+        return Ok(Some(row.get(0)));
+    }
+    Ok(None)
+}
+
+fn find_duplicate_tx(
+    tx: &mut postgres::Transaction<'_>,
+    external_ref: Option<&str>,
+    dedupe_key: &str,
+) -> Result<Option<i64>, AnyError> {
+    if let Some(ext_ref) = external_ref {
+        if let Some(row) = tx.query_opt(
+            "SELECT id FROM spends WHERE external_ref = $1 LIMIT 1",
+            &[&ext_ref],
+        )? {
+            return Ok(Some(row.get(0)));
+        }
+    }
+    if let Some(row) = tx.query_opt(
+        "SELECT id FROM spends WHERE dedupe_key = $1 LIMIT 1",
+        &[&dedupe_key],
+    )? {
+        return Ok(Some(row.get(0)));
+    }
+    Ok(None)
+}
+
 fn add_spend(client: &mut Client, args: AddArgs) -> Result<(), AnyError> {
-    ensure_two_decimal_places(args.amount)?;
+    let parsed_amount = parse_amount(&args.amount)?;
     let timestamp = parse_optional_timestamp(args.timestamp.as_deref())?;
+    let external_ref = empty_string_to_none(args.external_ref);
+    let dedupe_key = if args.allow_duplicate {
+        None
+    } else {
+        let dk = compute_dedupe_key(args.tx_type, timestamp, parsed_amount, &args.payee);
+        if let Some(existing_id) = find_duplicate(client, external_ref.as_deref(), &dk)? {
+            println!("duplicate spend skipped (existing id {existing_id})");
+            return Ok(());
+        }
+        Some(dk)
+    };
+
     let tag_id = match &args.tag {
         Some(tag) => Some(existing_tag_id(client, tag)?),
         None => default_payee_tag_id(client, &args.payee)?,
     };
-    let amount = format_amount(args.amount);
-    let note = empty_note_to_none(args.note);
-    let row = match timestamp {
-        Some(timestamp) => client.query_one(
-            "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::text::numeric, $3, $4, $5) RETURNING id",
-            &[&timestamp, &amount, &args.payee, &note, &tag_id],
-        )?,
-        None => client.query_one(
-            "INSERT INTO spends (amount, payee, note, tag_id) VALUES ($1::text::numeric, $2, $3, $4) RETURNING id",
-            &[&amount, &args.payee, &note, &tag_id],
-        )?,
-    };
+    let amount = format_amount(parsed_amount);
+    let note = empty_string_to_none(args.note);
+    let tx_type = args.tx_type.as_str();
+    let row = client.query_one(
+        "INSERT INTO spends (timestamp, amount, payee, note, tag_id, type, external_ref, dedupe_key)
+         VALUES ($1, $2::text::numeric, $3, $4, $5, $6, $7, $8)
+         RETURNING id",
+        &[
+            &timestamp,
+            &amount,
+            &args.payee,
+            &note,
+            &tag_id,
+            &tx_type,
+            &external_ref,
+            &dedupe_key,
+        ],
+    )?;
     let id: i64 = row.get(0);
-    println!("added spend {id}");
+    println!("added {} {id}", args.tx_type.as_str());
     Ok(())
 }
 
@@ -547,9 +732,10 @@ fn remove_spend(client: &mut Client, id: i64) -> Result<(), AnyError> {
 }
 
 fn update_spend(client: &mut Client, args: UpdateArgs) -> Result<(), AnyError> {
-    if let Some(amount) = args.amount {
-        ensure_two_decimal_places(amount)?;
-    }
+    let parsed_amount = match args.amount.as_deref() {
+        Some(raw) => Some(parse_amount(raw)?),
+        None => None,
+    };
     let timestamp = match args.timestamp.as_deref() {
         Some(timestamp) => Some(parse_timestamp(timestamp)?),
         None => None,
@@ -561,7 +747,7 @@ fn update_spend(client: &mut Client, args: UpdateArgs) -> Result<(), AnyError> {
 
     let mut set_parts = Vec::new();
     let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
-    if let Some(amount) = args.amount {
+    if let Some(amount) = parsed_amount {
         params.push(Box::new(format_amount(amount)));
         set_parts.push(format!("amount = ${}::text::numeric", params.len()));
     }
@@ -569,12 +755,16 @@ fn update_spend(client: &mut Client, args: UpdateArgs) -> Result<(), AnyError> {
         params.push(Box::new(payee));
         set_parts.push(format!("payee = ${}", params.len()));
     }
+    if let Some(tx_type) = args.tx_type {
+        params.push(Box::new(tx_type.as_str().to_string()));
+        set_parts.push(format!("type = ${}", params.len()));
+    }
     if let Some(timestamp) = timestamp {
         params.push(Box::new(timestamp));
         set_parts.push(format!("timestamp = ${}", params.len()));
     }
     if let Some(note) = args.note {
-        params.push(Box::new(empty_note_to_none(Some(note))));
+        params.push(Box::new(empty_string_to_none(Some(note))));
         set_parts.push(format!("note = ${}", params.len()));
     }
     if args.tag.is_some() {
@@ -605,6 +795,133 @@ fn update_spend(client: &mut Client, args: UpdateArgs) -> Result<(), AnyError> {
         }
     }
     println!("updated spend {}", args.id);
+    Ok(())
+}
+
+fn merge_credit(client: &mut Client, args: MergeArgs) -> Result<(), AnyError> {
+    if args.credit == args.into {
+        return Err("credit and debit ids must be different".into());
+    }
+
+    let mut tx = client.transaction()?;
+    let credit_row = tx
+        .query_opt(
+            "SELECT id, type, amount::text, payee, merged_into_id FROM spends WHERE id = $1 FOR UPDATE",
+            &[&args.credit],
+        )?
+        .ok_or_else(|| format!("credit transaction {} not found", args.credit))?;
+
+    let credit_type: String = credit_row.get(1);
+    let credit_amount = Decimal::from_str(credit_row.get::<_, String>(2).as_str())?;
+    let credit_payee: String = credit_row.get(3);
+    let credit_merged_into: Option<i64> = credit_row.get(4);
+
+    if credit_type != "credit" {
+        return Err(format!("transaction {} is not a credit", args.credit).into());
+    }
+    if let Some(target) = credit_merged_into {
+        return Err(format!("credit {} is already merged into debit {target}", args.credit).into());
+    }
+
+    let debit_row = tx
+        .query_opt(
+            "SELECT id, type, amount::text, note, merged_into_id FROM spends WHERE id = $1 FOR UPDATE",
+            &[&args.into],
+        )?
+        .ok_or_else(|| format!("debit transaction {} not found", args.into))?;
+
+    let debit_type: String = debit_row.get(1);
+    let debit_amount = Decimal::from_str(debit_row.get::<_, String>(2).as_str())?;
+    let debit_note: Option<String> = debit_row.get(3);
+    let debit_merged_into: Option<i64> = debit_row.get(4);
+
+    if debit_type != "debit" {
+        return Err(format!("transaction {} is not a debit", args.into).into());
+    }
+    if debit_merged_into.is_some() {
+        return Err(format!("debit {} is already merged", args.into).into());
+    }
+    if credit_amount > debit_amount {
+        return Err(format!(
+            "credit amount ({}) exceeds debit amount ({}); edit the credit amount first if splitting across multiple debits",
+            format_amount(credit_amount),
+            format_amount(debit_amount)
+        )
+        .into());
+    }
+
+    let new_debit_amount = debit_amount - credit_amount;
+    let merge_entry = format!(
+        "Merged credit #{} (₹{} from {})",
+        args.credit,
+        format_amount(credit_amount),
+        credit_payee
+    );
+    let updated_note = match debit_note {
+        Some(existing) if !existing.trim().is_empty() => format!("{existing} | {merge_entry}"),
+        _ => merge_entry,
+    };
+
+    let new_amount_str = format_amount(new_debit_amount);
+    tx.execute(
+        "UPDATE spends SET amount = $1::text::numeric, note = $2 WHERE id = $3",
+        &[&new_amount_str, &updated_note, &args.into],
+    )?;
+    tx.execute(
+        "UPDATE spends SET merged_into_id = $1 WHERE id = $2",
+        &[&args.into, &args.credit],
+    )?;
+
+    tx.commit()?;
+    println!(
+        "merged credit {} into debit {} (new debit amount: {})",
+        args.credit, args.into, new_amount_str
+    );
+    Ok(())
+}
+
+fn unmerge_credit(client: &mut Client, args: UnmergeArgs) -> Result<(), AnyError> {
+    let mut tx = client.transaction()?;
+    let credit_row = tx
+        .query_opt(
+            "SELECT id, type, amount::text, merged_into_id FROM spends WHERE id = $1 FOR UPDATE",
+            &[&args.credit],
+        )?
+        .ok_or_else(|| format!("credit transaction {} not found", args.credit))?;
+
+    let credit_type: String = credit_row.get(1);
+    let credit_amount = Decimal::from_str(credit_row.get::<_, String>(2).as_str())?;
+    let merged_into_id: Option<i64> = credit_row.get(3);
+
+    if credit_type != "credit" {
+        return Err(format!("transaction {} is not a credit", args.credit).into());
+    }
+    let debit_id = merged_into_id
+        .ok_or_else(|| format!("credit {} is not currently merged", args.credit))?;
+
+    let debit_row = tx
+        .query_opt(
+            "SELECT amount::text FROM spends WHERE id = $1 FOR UPDATE",
+            &[&debit_id],
+        )?
+        .ok_or_else(|| format!("target debit transaction {debit_id} not found"))?;
+    let debit_amount = Decimal::from_str(debit_row.get::<_, String>(0).as_str())?;
+    let restored_amount = format_amount(debit_amount + credit_amount);
+
+    tx.execute(
+        "UPDATE spends SET amount = $1::text::numeric WHERE id = $2",
+        &[&restored_amount, &debit_id],
+    )?;
+    tx.execute(
+        "UPDATE spends SET merged_into_id = NULL WHERE id = $1",
+        &[&args.credit],
+    )?;
+
+    tx.commit()?;
+    println!(
+        "unmerged credit {} from debit {} (restored debit amount: {})",
+        args.credit, debit_id, restored_amount
+    );
     Ok(())
 }
 
@@ -751,6 +1068,11 @@ fn export_cmd(client: &mut Client, args: ExportArgs) -> Result<(), AnyError> {
     let spends = list_spends(client, &list_args)?;
     match args.format {
         DataFormat::Json => println!("{}", serde_json::to_string_pretty(&spends)?),
+        DataFormat::Jsonl => {
+            for spend in &spends {
+                println!("{}", serde_json::to_string(spend)?);
+            }
+        }
         DataFormat::Csv => write_spends_csv(&spends)?,
     }
     Ok(())
@@ -758,41 +1080,61 @@ fn export_cmd(client: &mut Client, args: ExportArgs) -> Result<(), AnyError> {
 
 fn import_cmd(client: &mut Client, args: ImportArgs) -> Result<(), AnyError> {
     let format = args.format.or_else(|| infer_format(&args.file)).ok_or(
-        "could not infer import format from file extension; pass --format csv or --format json",
+        "could not infer import format from file extension; pass --format csv, json, or jsonl",
     )?;
     let imports = match format {
         DataFormat::Json => read_json_import(&args.file)?,
+        DataFormat::Jsonl => read_jsonl_import(&args.file)?,
         DataFormat::Csv => read_csv_import(&args.file)?,
     };
 
-    let count = imports.len();
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
     let mut tx = client.transaction()?;
     for item in imports {
         ensure_two_decimal_places(item.amount)?;
+        let tx_type = match item.tx_type.as_deref() {
+            Some(raw) if !raw.trim().is_empty() => SpendType::parse(raw)?,
+            _ => SpendType::Debit,
+        };
         let timestamp = parse_optional_timestamp(item.timestamp.as_deref())?;
+        let external_ref = empty_string_to_none(item.external_ref);
+        let dedupe_key = compute_dedupe_key(tx_type, timestamp, item.amount, &item.payee);
+
+        if find_duplicate_tx(&mut tx, external_ref.as_deref(), &dedupe_key)?.is_some() {
+            skipped += 1;
+            continue;
+        }
+
         let tag_id = match single_import_tag(item.tag, item.tags)? {
             Some(tag) => Some(tag_id_tx(&mut tx, &tag, true)?),
-            None => None,
+            None => default_payee_tag_id_tx(&mut tx, &item.payee)?,
         };
         let amount = format_amount(item.amount);
-        let note = empty_note_to_none(item.note);
-        match timestamp {
-            Some(timestamp) => {
-                tx.execute(
-                    "INSERT INTO spends (timestamp, amount, payee, note, tag_id) VALUES ($1, $2::text::numeric, $3, $4, $5)",
-                    &[&timestamp, &amount, &item.payee, &note, &tag_id],
-                )?;
-            }
-            None => {
-                tx.execute(
-                    "INSERT INTO spends (amount, payee, note, tag_id) VALUES ($1::text::numeric, $2, $3, $4)",
-                    &[&amount, &item.payee, &note, &tag_id],
-                )?;
-            }
-        }
+        let note = empty_string_to_none(item.note);
+        let tx_type_str = tx_type.as_str();
+        tx.execute(
+            "INSERT INTO spends (timestamp, amount, payee, note, tag_id, type, external_ref, dedupe_key)
+             VALUES ($1, $2::text::numeric, $3, $4, $5, $6, $7, $8)",
+            &[
+                &timestamp,
+                &amount,
+                &item.payee,
+                &note,
+                &tag_id,
+                &tx_type_str,
+                &external_ref,
+                &dedupe_key,
+            ],
+        )?;
+        imported += 1;
     }
     tx.commit()?;
-    println!("imported {count} spends");
+    if skipped > 0 {
+        println!("imported {imported} spends (skipped {skipped} duplicates)");
+    } else {
+        println!("imported {imported} spends");
+    }
     Ok(())
 }
 
@@ -819,7 +1161,7 @@ fn list_spends(client: &mut Client, args: &ListArgs) -> Result<Vec<Spend>, AnyEr
     };
     let direction = if args.desc { "DESC" } else { "ASC" };
     let mut query = format!(
-        "SELECT s.id, s.timestamp, s.amount::text, s.payee, s.note, t.name AS tag
+        "SELECT s.id, s.type, s.timestamp, s.amount::text, s.payee, s.note, t.name AS tag, s.external_ref, s.merged_into_id
          FROM spends s
          LEFT JOIN tags t ON t.id = s.tag_id
          {where_clause}
@@ -845,7 +1187,7 @@ fn list_spends(client: &mut Client, args: &ListArgs) -> Result<Vec<Spend>, AnyEr
 
 fn get_spend(client: &mut Client, id: i64) -> Result<Option<Spend>, AnyError> {
     let row = client.query_opt(
-        "SELECT s.id, s.timestamp, s.amount::text, s.payee, s.note, t.name AS tag
+        "SELECT s.id, s.type, s.timestamp, s.amount::text, s.payee, s.note, t.name AS tag, s.external_ref, s.merged_into_id
          FROM spends s
          LEFT JOIN tags t ON t.id = s.tag_id
          WHERE s.id = $1",
@@ -855,8 +1197,12 @@ fn get_spend(client: &mut Client, id: i64) -> Result<Option<Spend>, AnyError> {
 }
 
 fn summary(client: &mut Client, args: &SummaryArgs) -> Result<Vec<SummaryRow>, AnyError> {
+    let mut filters = args.filters.clone();
+    if filters.tx_type.is_none() {
+        filters.tx_type = Some(SpendType::Debit);
+    }
     let mut params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
-    let where_clause = build_where_clause(&args.filters, &mut params)?;
+    let where_clause = build_where_clause(&filters, &mut params)?;
     let select_group = match args.group_by {
         GroupBy::Day => "to_char(date_trunc('day', s.timestamp), 'YYYY-MM-DD')",
         GroupBy::Week => "to_char(date_trunc('week', s.timestamp), 'IYYY-IW')",
@@ -890,6 +1236,13 @@ fn build_where_clause(
     params: &mut Vec<Box<dyn ToSql + Sync>>,
 ) -> Result<String, AnyError> {
     let mut parts = Vec::new();
+    if !filters.include_merged {
+        parts.push("s.merged_into_id IS NULL".to_string());
+    }
+    if let Some(tx_type) = filters.tx_type {
+        params.push(Box::new(tx_type.as_str().to_string()));
+        parts.push(format!("s.type = ${}", params.len()));
+    }
     if let Some(tag) = &filters.tag {
         params.push(Box::new(tag.clone()));
         parts.push(format!("t.name = ${}", params.len()));
@@ -983,6 +1336,15 @@ fn default_payee_tag_id(client: &mut Client, payee: &str) -> Result<Option<i64>,
         .map(|row| row.get(0)))
 }
 
+fn default_payee_tag_id_tx(
+    tx: &mut postgres::Transaction<'_>,
+    payee: &str,
+) -> Result<Option<i64>, AnyError> {
+    Ok(tx
+        .query_opt("SELECT tag_id FROM payees WHERE name = $1", &[&payee])?
+        .map(|row| row.get(0)))
+}
+
 fn list_payees(client: &mut Client) -> Result<Vec<PayeeRule>, AnyError> {
     client
         .query(
@@ -1021,16 +1383,20 @@ fn payee_rule_from_row(row: Row) -> Result<PayeeRule, AnyError> {
 fn spend_from_row(row: Row) -> Result<Spend, AnyError> {
     Ok(Spend {
         id: row.get(0),
-        timestamp: row.get(1),
-        amount: Decimal::from_str(row.get::<_, String>(2).as_str())?,
-        payee: row.get(3),
-        note: row.get(4),
-        tag: row.get(5),
+        tx_type: row.get(1),
+        timestamp: row.get(2),
+        amount: Decimal::from_str(row.get::<_, String>(3).as_str())?,
+        payee: row.get(4),
+        note: row.get(5),
+        tag: row.get(6),
+        external_ref: row.get(7),
+        merged_into_id: row.get(8),
     })
 }
 
 fn print_spend(spend: &Spend) {
     println!("id: {}", spend.id);
+    println!("type: {}", spend.tx_type);
     println!("timestamp: {}", spend.timestamp.to_rfc3339());
     println!("amount: {}", format_amount(spend.amount));
     println!("payee: {}", spend.payee);
@@ -1038,17 +1404,24 @@ fn print_spend(spend: &Spend) {
         println!("note: {note}");
     }
     println!("tag: {}", spend.tag.as_deref().unwrap_or("Untagged"));
+    if let Some(ext_ref) = &spend.external_ref {
+        println!("ref: {ext_ref}");
+    }
+    if let Some(merged_into_id) = spend.merged_into_id {
+        println!("merged_into_id: {merged_into_id}");
+    }
 }
 
 fn print_spends_table(spends: &[Spend]) {
     println!(
-        "{:<6} {:<25} {:>12} {:<24} {}",
-        "id", "timestamp", "amount", "payee", "tag"
+        "{:<6} {:<7} {:<25} {:>12} {:<24} {}",
+        "id", "type", "timestamp", "amount", "payee", "tag"
     );
     for spend in spends {
         println!(
-            "{:<6} {:<25} {:>12} {:<24} {}",
+            "{:<6} {:<7} {:<25} {:>12} {:<24} {}",
             spend.id,
+            spend.tx_type,
             spend.timestamp.to_rfc3339(),
             format_amount(spend.amount),
             truncate(&spend.payee, 24),
@@ -1059,15 +1432,31 @@ fn print_spends_table(spends: &[Spend]) {
 
 fn write_spends_csv(spends: &[Spend]) -> Result<(), AnyError> {
     let mut writer = csv::Writer::from_writer(io::stdout());
-    writer.write_record(["id", "timestamp", "amount", "payee", "note", "tag"])?;
+    writer.write_record([
+        "id",
+        "type",
+        "timestamp",
+        "amount",
+        "payee",
+        "note",
+        "tag",
+        "ref",
+        "merged_into_id",
+    ])?;
     for spend in spends {
         writer.write_record([
             spend.id.to_string(),
+            spend.tx_type.clone(),
             spend.timestamp.to_rfc3339(),
             format_amount(spend.amount),
             spend.payee.clone(),
             spend.note.clone().unwrap_or_default(),
             spend.tag.clone().unwrap_or_default(),
+            spend.external_ref.clone().unwrap_or_default(),
+            spend
+                .merged_into_id
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
         ])?;
     }
     writer.flush()?;
@@ -1079,14 +1468,30 @@ fn read_json_import(path: &Path) -> Result<Vec<ImportSpend>, AnyError> {
     Ok(serde_json::from_str(&raw)?)
 }
 
+fn read_jsonl_import(path: &Path) -> Result<Vec<ImportSpend>, AnyError> {
+    let raw = fs::read_to_string(path)?;
+    let mut imports = Vec::new();
+    for (idx, line) in raw.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let item: ImportSpend = serde_json::from_str(trimmed)
+            .map_err(|err| format!("invalid JSONL on line {}: {err}", idx + 1))?;
+        imports.push(item);
+    }
+    Ok(imports)
+}
+
 fn read_csv_import(path: &Path) -> Result<Vec<ImportSpend>, AnyError> {
     let mut reader = csv::Reader::from_path(path)?;
     let mut imports = Vec::new();
     for row in reader.deserialize() {
         let row: CsvImportSpend = row?;
         imports.push(ImportSpend {
-            amount: row.amount,
+            amount: parse_amount(&row.amount)?,
             payee: row.payee,
+            tx_type: row.tx_type,
             timestamp: row.timestamp,
             note: row.note,
             tag: row.tag,
@@ -1098,6 +1503,7 @@ fn read_csv_import(path: &Path) -> Result<Vec<ImportSpend>, AnyError> {
                 .filter(|tag| !tag.is_empty())
                 .map(ToOwned::to_owned)
                 .collect(),
+            external_ref: row.external_ref,
         });
     }
     Ok(imports)
@@ -1121,14 +1527,15 @@ fn infer_format(path: &Path) -> Option<DataFormat> {
     match path.extension()?.to_str()? {
         "csv" => Some(DataFormat::Csv),
         "json" => Some(DataFormat::Json),
+        "jsonl" => Some(DataFormat::Jsonl),
         _ => None,
     }
 }
 
-fn parse_optional_timestamp(value: Option<&str>) -> Result<Option<DateTime<Utc>>, AnyError> {
+fn parse_optional_timestamp(value: Option<&str>) -> Result<DateTime<Utc>, AnyError> {
     match value {
-        Some(value) => Ok(Some(parse_timestamp(value)?)),
-        None => Ok(Some(Local::now().with_timezone(&Utc))),
+        Some(value) if !value.trim().is_empty() => parse_timestamp(value),
+        _ => Ok(Local::now().with_timezone(&Utc)),
     }
 }
 
@@ -1166,6 +1573,17 @@ fn parse_date_end_exclusive(value: &str) -> Result<Option<DateTime<Utc>>, AnyErr
     Ok(Some(next.with_timezone(&Utc)))
 }
 
+fn parse_amount(raw: &str) -> Result<Decimal, AnyError> {
+    let cleaned = raw.trim().replace(',', "");
+    let amount = Decimal::from_str(&cleaned)
+        .map_err(|_| format!("invalid amount: {raw}"))?;
+    if amount.is_sign_negative() {
+        return Err(format!("amount must be non-negative: {raw}").into());
+    }
+    ensure_two_decimal_places(amount)?;
+    Ok(amount)
+}
+
 fn ensure_two_decimal_places(amount: Decimal) -> Result<(), AnyError> {
     if amount.scale() > 2 {
         return Err(format!("amount must have at most two decimal places: {amount}").into());
@@ -1173,8 +1591,15 @@ fn ensure_two_decimal_places(amount: Decimal) -> Result<(), AnyError> {
     Ok(())
 }
 
-fn empty_note_to_none(note: Option<String>) -> Option<String> {
-    note.and_then(|note| if note.is_empty() { None } else { Some(note) })
+fn empty_string_to_none(value: Option<String>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn format_amount(amount: Decimal) -> String {

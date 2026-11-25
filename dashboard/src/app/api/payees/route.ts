@@ -9,7 +9,7 @@ export async function GET() {
                 COALESCE(SUM(s.amount), 0)::text AS total_spend, MAX(s.timestamp)::text AS last_seen
          FROM payees p
          JOIN tags t ON t.id = p.tag_id
-         LEFT JOIN spends s ON s.payee = p.name
+         LEFT JOIN spends s ON s.payee = p.name AND s.merged_into_id IS NULL
          GROUP BY p.id, p.name, t.name
          ORDER BY p.name`
       ),
@@ -17,7 +17,7 @@ export async function GET() {
         `SELECT s.payee, COUNT(*)::int AS spend_count, SUM(s.amount)::text AS total_spend, MAX(s.timestamp)::text AS last_seen
          FROM spends s
          LEFT JOIN payees p ON p.name = s.payee
-         WHERE p.id IS NULL
+         WHERE s.merged_into_id IS NULL AND s.type = 'debit' AND p.id IS NULL
          GROUP BY s.payee
          ORDER BY COUNT(*) DESC, SUM(s.amount) DESC
          LIMIT 10`

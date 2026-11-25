@@ -2,11 +2,12 @@
 
 import * as React from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react"
+import { GitMerge, MoreHorizontal, Pencil, Trash2, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { DeleteSpendDialog } from "@/components/delete-spend-dialog"
 import { EditSpendAmountDialog } from "@/components/edit-spend-amount-dialog"
+import { MergeCreditDialog } from "@/components/merge-credit-dialog"
 import { TagSelect, useTags } from "@/components/tag-select"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -20,6 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { formatDateTime, formatMoney } from "@/lib/format"
 import type { TransactionRow } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 type TransactionsData = { rows: TransactionRow[]; total: number }
 
@@ -31,6 +33,7 @@ export function TransactionsClient() {
   const [loading, setLoading] = React.useState(true)
   const [editing, setEditing] = React.useState<TransactionRow | null>(null)
   const [editingAmount, setEditingAmount] = React.useState<TransactionRow | null>(null)
+  const [merging, setMerging] = React.useState<TransactionRow | null>(null)
   const [deleting, setDeleting] = React.useState<TransactionRow | null>(null)
   const limit = Number(searchParams.get("limit") ?? 25)
   const offset = Number(searchParams.get("offset") ?? 0)
@@ -72,6 +75,22 @@ export function TransactionsClient() {
     router.push(`?${params.toString()}`)
   }
 
+  async function unmergeCredit(creditId: number) {
+    const response = await fetch("/api/transactions/unmerge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ creditId }),
+    })
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}))
+      toast.error(body.error ?? "Could not unmerge credit")
+      return
+    }
+    toast.success("Credit unmerged and debit amount restored")
+    load()
+    window.dispatchEvent(new Event("spend:data-changed"))
+  }
+
   return (
     <div className="space-y-4">
       <Card className="border-0 bg-card/70">
@@ -79,8 +98,16 @@ export function TransactionsClient() {
           <CardTitle>Transactions</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-2 md:grid-cols-6">
+          <div className="grid gap-2 md:grid-cols-7">
             <Input placeholder="Payee contains" defaultValue={searchParams.get("payee") ?? ""} onBlur={(event) => updateParam({ payee: event.target.value })} />
+            <Select value={searchParams.get("type") ?? "all"} onValueChange={(value) => updateParam({ type: value })}>
+              <SelectTrigger><SelectValue placeholder="Type" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All types</SelectItem>
+                <SelectItem value="debit">Debits</SelectItem>
+                <SelectItem value="credit">Credits</SelectItem>
+              </SelectContent>
+            </Select>
             <Select value={searchParams.get("tag") ?? "all"} onValueChange={(value) => updateParam({ tag: value })}>
               <SelectTrigger><SelectValue placeholder="Tag" /></SelectTrigger>
               <SelectContent>
@@ -116,25 +143,47 @@ export function TransactionsClient() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.rows.map((row) => (
-                  <TableRow key={row.id} className="border-white/5">
-                    <TableCell className="text-muted-foreground">{formatDateTime(row.timestamp)}</TableCell>
-                    <TableCell className="font-mono">{formatMoney(row.amount)}</TableCell>
-                    <TableCell>{row.payee}</TableCell>
-                    <TableCell>{row.tag ? <Badge variant="secondary">{row.tag}</Badge> : <Badge variant="outline">Untagged</Badge>}</TableCell>
-                    <TableCell className="max-w-xs truncate text-muted-foreground">{row.note ?? "-"}</TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild><Button size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => setEditing(row)}>Edit note/tag</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setEditingAmount(row)}><Pencil />Edit amount</DropdownMenuItem>
-                          <DropdownMenuItem variant="destructive" onClick={() => setDeleting(row)}><Trash2 />Delete</DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {data.rows.map((row) => {
+                  const isCredit = row.type === "credit"
+                  const mergedCount = row.mergedCredits?.length ?? 0
+                  return (
+                    <TableRow key={row.id} className="border-white/5">
+                      <TableCell className="text-muted-foreground">{formatDateTime(row.timestamp)}</TableCell>
+                      <TableCell className={cn("font-mono", isCredit && "text-emerald-400")}>
+                        {isCredit ? `+${formatMoney(row.amount)}` : formatMoney(row.amount)}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span>{row.payee}</span>
+                          {isCredit ? <Badge className="bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20">Credit</Badge> : null}
+                          {mergedCount > 0 ? <Badge variant="outline">{mergedCount} merged</Badge> : null}
+                        </div>
+                      </TableCell>
+                      <TableCell>{row.tag ? <Badge variant="secondary">{row.tag}</Badge> : <Badge variant="outline">Untagged</Badge>}</TableCell>
+                      <TableCell className="max-w-xs truncate text-muted-foreground">{row.note ?? "-"}</TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild><Button size="icon" variant="ghost"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {isCredit ? (
+                              <DropdownMenuItem onClick={() => setMerging(row)}>
+                                <GitMerge />Merge into debit
+                              </DropdownMenuItem>
+                            ) : null}
+                            {row.mergedCredits?.map((mc) => (
+                              <DropdownMenuItem key={mc.id} onClick={() => unmergeCredit(mc.id)}>
+                                <Undo2 />Unmerge {formatMoney(mc.amount)} ({mc.payee})
+                              </DropdownMenuItem>
+                            ))}
+                            <DropdownMenuItem onClick={() => setEditing(row)}>Edit note/tag</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setEditingAmount(row)}><Pencil />Edit amount</DropdownMenuItem>
+                            <DropdownMenuItem variant="destructive" onClick={() => setDeleting(row)}><Trash2 />Delete</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
                 {!data.rows.length ? <TableRow><TableCell className="h-28 text-center text-muted-foreground" colSpan={6}>{loading ? "Loading..." : "No transactions in this range."}</TableCell></TableRow> : null}
               </TableBody>
             </Table>
@@ -150,6 +199,7 @@ export function TransactionsClient() {
       </Card>
       {editing ? <EditTransactionDialog row={editing} onClose={() => setEditing(null)} onSaved={load} /> : null}
       {editingAmount ? <EditSpendAmountDialog spend={editingAmount} onClose={() => setEditingAmount(null)} /> : null}
+      {merging ? <MergeCreditDialog credit={merging} onClose={() => setMerging(null)} onMerged={load} /> : null}
       {deleting ? <DeleteSpendDialog spend={deleting} onClose={() => setDeleting(null)} onDeleted={() => setDeleting(null)} /> : null}
     </div>
   )
@@ -182,7 +232,7 @@ function EditTransactionDialog({ row, onClose, onSaved }: { row: TransactionRow;
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="border-0 bg-card">
-        <DialogHeader><DialogTitle>Edit spend</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Edit transaction</DialogTitle></DialogHeader>
         <div className="space-y-4">
           <div className="grid gap-2"><Label>Tag</Label><TagSelect value={tag || undefined} onValueChange={setTag} /></div>
           <div className="grid gap-2"><Label>Note</Label><Textarea value={note} onChange={(event) => setNote(event.target.value)} /></div>

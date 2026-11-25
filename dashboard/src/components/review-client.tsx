@@ -1,11 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { Pencil, Trash2 } from "lucide-react"
+import { GitMerge, Pencil, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { DeleteSpendDialog } from "@/components/delete-spend-dialog"
 import { EditSpendAmountDialog } from "@/components/edit-spend-amount-dialog"
+import { MergeCreditDialog } from "@/components/merge-credit-dialog"
 import { PayeeRuleDialog } from "@/components/payee-rule-dialog"
 import { TagSelect } from "@/components/tag-select"
 import { Badge } from "@/components/ui/badge"
@@ -15,6 +16,7 @@ import { Input } from "@/components/ui/input"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { formatExactDateTime, formatMoney, formatRelativeTime } from "@/lib/format"
 import type { TransactionRow } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 type ReviewSpend = TransactionRow & { default_tag: string | null }
 type UnknownPayee = { payee: string; spend_count: number; totalSpend: number; last_seen: string | null }
@@ -43,8 +45,8 @@ export function ReviewClient() {
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
       <div className="space-y-4">
-        <Queue title="Last 10 spends" spends={data.last} onChanged={load} onCreatePayee={setPayeeDialog} />
-        <Queue title="Untagged spends" spends={data.untagged} onChanged={load} onCreatePayee={setPayeeDialog} />
+        <Queue title="Last 10 transactions" spends={data.last} onChanged={load} onCreatePayee={setPayeeDialog} />
+        <Queue title="Untagged transactions" spends={data.untagged} onChanged={load} onCreatePayee={setPayeeDialog} />
         <Queue title="Missing notes" spends={data.missingNotes} onChanged={load} onCreatePayee={setPayeeDialog} />
       </div>
       <Card className="h-fit border-0 bg-card/70">
@@ -82,7 +84,9 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
   const [note, setNote] = React.useState(spend.note ?? "")
   const [saving, setSaving] = React.useState(false)
   const [editingAmount, setEditingAmount] = React.useState(false)
+  const [mergingCredit, setMergingCredit] = React.useState(false)
   const [confirmDelete, setConfirmDelete] = React.useState(false)
+  const isCredit = spend.type === "credit"
 
   async function save(clearTag = false) {
     setSaving(true)
@@ -94,7 +98,7 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
     setSaving(false)
     if (!response.ok) {
       const body = await response.json().catch(() => ({}))
-      toast.error(body.error ?? "Could not update spend")
+      toast.error(body.error ?? "Could not update transaction")
       return
     }
     toast.success("Review item saved")
@@ -106,9 +110,14 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
     <div className="rounded-xl bg-muted/25 p-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 space-y-2">
-          <div className="font-mono text-3xl font-semibold tracking-tight text-foreground">{formatMoney(spend.amount)}</div>
+          <div className={cn("font-mono text-3xl font-semibold tracking-tight", isCredit ? "text-emerald-400" : "text-foreground")}>
+            {isCredit ? `+${formatMoney(spend.amount)}` : formatMoney(spend.amount)}
+          </div>
           <div className="min-w-0">
-            <div className="truncate font-medium">{spend.payee}</div>
+            <div className="flex items-center gap-2">
+              <span className="truncate font-medium">{spend.payee}</span>
+              {isCredit ? <Badge className="bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20">Credit</Badge> : null}
+            </div>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -122,6 +131,11 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
           </div>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
+          {isCredit ? (
+            <Button size="sm" variant="default" onClick={() => setMergingCredit(true)}>
+              <GitMerge />Merge into debit
+            </Button>
+          ) : null}
           <Button size="sm" variant="secondary" onClick={() => onCreatePayee(spend.payee)}>Payee default</Button>
           <Button size="sm" variant="outline" onClick={() => setEditingAmount(true)}><Pencil />Edit amount</Button>
           <Button size="sm" variant="destructive" onClick={() => setConfirmDelete(true)}><Trash2 />Delete</Button>
@@ -133,6 +147,7 @@ function SpendReviewRow({ spend, onChanged, onCreatePayee }: { spend: ReviewSpen
         <div className="flex gap-2"><Button size="sm" variant="outline" disabled={saving} onClick={() => save(true)}>Clear</Button><Button size="sm" disabled={saving} onClick={() => save(false)}>Save</Button></div>
       </div>
       {editingAmount ? <EditSpendAmountDialog spend={spend} onClose={() => setEditingAmount(false)} /> : null}
+      {mergingCredit ? <MergeCreditDialog credit={spend} onClose={() => setMergingCredit(false)} onMerged={onChanged} /> : null}
       {confirmDelete ? <DeleteSpendDialog spend={spend} onClose={() => setConfirmDelete(false)} onDeleted={() => { setConfirmDelete(false); onChanged() }} /> : null}
     </div>
   )

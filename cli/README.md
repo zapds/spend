@@ -4,13 +4,14 @@ Agent-friendly CLI for recording and querying personal spending against PostgreS
 
 ## Features
 
-- **add** – Record a spend with amount, payee, optional tag, optional note/timestamp
-- **list** – Filter by tag, payee, date range, amount range; sort any column; output as table, JSON, or CSV
+- **add** – Record a debit or credit with amount, payee, optional `--type`, `--tag`, `--ref`, `--note`, `--timestamp`, and automatic duplicate prevention (`--allow-duplicate` to override)
+- **merge / unmerge** – Merge a credit reimbursement into a debit to reduce its amount while keeping an audit trail and duplicate protection
+- **list** – Filter by type, tag, payee, date range, amount range; sort any column; output as table, JSON, or CSV
 - **get** – Fetch a single spend by id
-- **update** – Modify fields or replace tags on an existing spend
-- **remove** – Delete a spend by id
-- **summary** – Aggregate totals grouped by day, week, month, year, tag, or payee
-- **export/import** – Bulk CSV or JSON transfer; missing tags auto-created on import
+- **update** – Modify fields, type, or replace tags on an existing transaction
+- **remove** – Delete a transaction by id
+- **summary** – Aggregate totals grouped by day, week, month, year, tag, or payee (defaults to debits; pass `--type credit` for credits)
+- **export/import** – Bulk CSV, JSON, or JSONL transfer; missing tags auto-created on import and duplicates automatically skipped
 - **tags** – CRUD for tag names (renaming, removing with referential integrity)
 - **payees** – Store exact payee names with one required default tag for future spends
 - **validate-tags** – Check whether planned tag names exist before scripting an add
